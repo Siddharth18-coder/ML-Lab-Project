@@ -1,0 +1,98 @@
+{
+  "accuracy": 0.9912,
+  "precision_macro": 0.9901,
+  "precision_weighted": 0.9913,
+  "recall_macro": 0.99,
+  "recall_weighted": 0.9912,
+  "f1_macro": 0.99,
+  "f1_weighted": 0.9912,
+  "roc_auc_macro": 0.9998,
+  "roc_auc_weighted": 0.9998,
+  "roc_auc_per_class": {
+    "Healthy": 1.0,
+    "Pre-diabetic": 0.9997,
+    "Diabetic": 0.9997
+  },
+  "confusion_matrix": {
+    "matrix": [
+      [
+        383,
+        1,
+        0
+      ],
+      [
+        2,
+        219,
+        3
+      ],
+      [
+        0,
+        1,
+        191
+      ]
+    ],
+    "classes": [
+      "Healthy",
+      "Pre-diabetic",
+      "Diabetic"
+    ],
+    "breakdown": {
+      "Healthy": {
+        "total_actual": 384,
+        "correct_predictions": 383,
+        "sensitivity_recall": 0.9973958333333334
+      },
+      "Pre-diabetic": {
+        "total_actual": 224,
+        "correct_predictions": 219,
+        "sensitivity_recall": 0.9776785714285714
+      },
+      "Diabetic": {
+        "total_actual": 192,
+        "correct_predictions": 191,
+        "sensitivity_recall": 0.9947916666666666
+      }
+    }
+  },
+  "classification_report": {
+    "Healthy": {
+      "precision": 0.9948051948051948,
+      "recall": 0.9973958333333334,
+      "f1-score": 0.9960988296488946,
+      "support": 384.0
+    },
+    "Pre-diabetic": {
+      "precision": 0.9909502262443439,
+      "recall": 0.9776785714285714,
+      "f1-score": 0.9842696629213483,
+      "support": 224.0
+    },
+    "Diabetic": {
+      "precision": 0.9845360824742269,
+      "recall": 0.9947916666666666,
+      "f1-score": 0.9896373056994818,
+      "support": 192.0
+    },
+    "accuracy": 0.99125,
+    "macro avg": {
+      "precision": 0.9900971678412551,
+      "recall": 0.9899553571428571,
+      "f1-score": 0.9900019327565749,
+      "support": 800.0
+    },
+    "weighted avg": {
+      "precision": 0.9912612166487242,
+      "recall": 0.99125,
+      "f1-score": 0.9912358972173226,
+      "support": 800.0
+    }
+  },
+  "cross_validation": {
+    "cv_accuracy_mean": 0.9846875,
+    "cv_accuracy_std": 0.0030297999108851803,
+    "cv_f1_macro_mean": 0.981639169121887,
+    "cv_f1_macro_std": 0.003978531449253509,
+    "cv_precision_macro_mean": 0.9820980655889968,
+    "cv_recall_macro_mean": 0.9812813609873343
+  }
+}
