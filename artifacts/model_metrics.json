@@ -1,17 +1,19 @@
 {
-  "accuracy": 0.9912,
-  "precision_macro": 0.9901,
-  "precision_weighted": 0.9913,
-  "recall_macro": 0.99,
-  "recall_weighted": 0.9912,
-  "f1_macro": 0.99,
-  "f1_weighted": 0.9912,
-  "roc_auc_macro": 0.9998,
-  "roc_auc_weighted": 0.9998,
+  "dataset_type": "synthetic",
+  "accuracy": 0.99,
+  "precision_macro": 0.988,
+  "precision_weighted": 0.99,
+  "recall_macro": 0.988,
+  "recall_weighted": 0.99,
+  "f1_macro": 0.988,
+  "f1_weighted": 0.99,
+  "calibration_log_loss": 0.0947,
+  "roc_auc_macro": 0.9995,
+  "roc_auc_weighted": 0.9996,
   "roc_auc_per_class": {
-    "Healthy": 1.0,
-    "Pre-diabetic": 0.9997,
-    "Diabetic": 0.9997
+    "Healthy": 0.9999,
+    "Pre-diabetic": 0.9991,
+    "Diabetic": 0.9994
   },
   "confusion_matrix": {
     "matrix": [
@@ -21,14 +23,14 @@
         0
       ],
       [
-        2,
-        219,
+        1,
+        220,
         3
       ],
       [
         0,
-        1,
-        191
+        3,
+        189
       ]
     ],
     "classes": [
@@ -44,55 +46,75 @@
       },
       "Pre-diabetic": {
         "total_actual": 224,
-        "correct_predictions": 219,
-        "sensitivity_recall": 0.9776785714285714
+        "correct_predictions": 220,
+        "sensitivity_recall": 0.9821428571428571
       },
       "Diabetic": {
         "total_actual": 192,
-        "correct_predictions": 191,
-        "sensitivity_recall": 0.9947916666666666
+        "correct_predictions": 189,
+        "sensitivity_recall": 0.984375
       }
     }
   },
   "classification_report": {
     "Healthy": {
-      "precision": 0.9948051948051948,
+      "precision": 0.9973958333333334,
       "recall": 0.9973958333333334,
-      "f1-score": 0.9960988296488946,
+      "f1-score": 0.9973958333333334,
       "support": 384.0
     },
     "Pre-diabetic": {
-      "precision": 0.9909502262443439,
-      "recall": 0.9776785714285714,
-      "f1-score": 0.9842696629213483,
+      "precision": 0.9821428571428571,
+      "recall": 0.9821428571428571,
+      "f1-score": 0.9821428571428571,
       "support": 224.0
     },
     "Diabetic": {
-      "precision": 0.9845360824742269,
-      "recall": 0.9947916666666666,
-      "f1-score": 0.9896373056994818,
+      "precision": 0.984375,
+      "recall": 0.984375,
+      "f1-score": 0.984375,
       "support": 192.0
     },
-    "accuracy": 0.99125,
+    "accuracy": 0.99,
     "macro avg": {
-      "precision": 0.9900971678412551,
-      "recall": 0.9899553571428571,
-      "f1-score": 0.9900019327565749,
+      "precision": 0.9879712301587302,
+      "recall": 0.9879712301587302,
+      "f1-score": 0.9879712301587302,
       "support": 800.0
     },
     "weighted avg": {
-      "precision": 0.9912612166487242,
-      "recall": 0.99125,
-      "f1-score": 0.9912358972173226,
+      "precision": 0.99,
+      "recall": 0.99,
+      "f1-score": 0.99,
       "support": 800.0
     }
   },
   "cross_validation": {
-    "cv_accuracy_mean": 0.9846875,
-    "cv_accuracy_std": 0.0030297999108851803,
-    "cv_f1_macro_mean": 0.981639169121887,
-    "cv_f1_macro_std": 0.003978531449253509,
-    "cv_precision_macro_mean": 0.9820980655889968,
-    "cv_recall_macro_mean": 0.9812813609873343
+    "cv_accuracy_mean": 0.9884375000000001,
+    "cv_accuracy_std": 0.0021194781197266307,
+    "cv_f1_macro_mean": 0.9864700980606423,
+    "cv_f1_macro_std": 0.002527747793086558,
+    "cv_precision_macro_mean": 0.9869561878711088,
+    "cv_recall_macro_mean": 0.9860911033377666
+  },
+  "baselines_comparison": {
+    "majority_class_dummy": {
+      "model": "DummyClassifier(strategy='most_frequent')",
+      "accuracy": 0.48,
+      "f1_macro": 0.2162,
+      "description": "Always predicts the most frequent class in the training partition."
+    },
+    "logistic_regression": {
+      "model": "LogisticRegression(class_weight='balanced')",
+      "accuracy": 0.9688,
+      "f1_macro": 0.9658,
+      "description": "Standard linear multi-class baseline with balanced weighting."
+    },
+    "ada_rule_heuristic": {
+      "model": "ADA Standard Threshold Heuristic",
+      "accuracy": 0.9325,
+      "f1_macro": 0.9239,
+      "description": "Deterministic rule: Diabetic if FBG>=126 or HbA1c>=6.5; Pre-diabetic if FBG>=100 or HbA1c>=5.7; else Healthy."
+    }
   }
 }

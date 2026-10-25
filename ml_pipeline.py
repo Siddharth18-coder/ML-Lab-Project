@@ -1,32 +1,23 @@
 """
-ml_pipeline.py - Comprehensive End-to-End Clinical Machine Learning Pipeline
-=============================================================================
-Role: Lead Full-Stack Machine Learning Engineer
-Task: Multi-Class Diabetes Risk Stratification (Healthy, Pre-diabetic, Diabetic)
+ml_pipeline.py - Clinical Diabetes Risk Machine Learning Pipeline (Educational Prototype)
+========================================================================================
+Scope & Purpose:
+This pipeline implements data cleaning, leakage-free preprocessing, multi-class model training,
+stratified 5-fold cross-validation, baseline comparisons, test-set metrics evaluation, and
+patient-level SHAP explainability for an educational diabetes classification prototype.
 
-Key Architectural Modules:
-1. Data Generation / Ingestion: Realistic clinical cohort generator adhering to
-   ADA (American Diabetes Association) guidelines, with physiological noise,
-   clinical missingness, and laboratory outliers.
-2. Robust Data Cleaning:
-   - Physiological outlier capping (Winsorization & clinical physiological boundaries)
-   - Missing value imputation using KNNImputer on numerical lab tests
-   - Most-frequent imputation and One-Hot Encoding for categorical demographics
-   - Robust scaling to guard against extreme skew in biomarker distributions
-3. Model Training & Validation:
-   - Stratified 80/20 holdout train/test split
-   - Stratified 5-Fold Cross Validation
-   - Class-weighting / SMOTE support to counteract clinical prevalence imbalances
-   - Multi-class optimization (Random Forest / XGBoost / LightGBM)
-4. Comprehensive Metric Reporting:
-   - Accuracy, Precision (Macro/Weighted), Recall (Macro/Weighted), F1-Score (Macro/Weighted)
-   - One-vs-Rest (OvR) ROC-AUC per class (Healthy, Pre-diabetic, Diabetic)
-   - Full 3x3 Confusion Matrix & Per-Class Clinical Sensitivity/Specificity
-5. Explainability (XAI):
-   - SHAP TreeExplainer integration for global and local patient-level feature attributions
-   - Ranked positive/negative driver extraction for individual clinical consultation
-6. Artifact Persistence:
-   - Serializes trained pipeline, explainer, feature metadata, and metrics into artifacts/
+Dataset Provenance & Clinical Framing:
+- Default Data: Purely synthetic benchmark cohort generated via American Diabetes Association
+  (ADA) physiological thresholds with realistic noise, physiological outliers, and missingness.
+- Label-Biomarker Mechanism: Labels are assigned first by latent metabolic risk, and key diagnostic
+  biomarkers (fasting glucose, HbA1c) are subsequently generated from those labels.
+  THEREFORE: High test set accuracy on this synthetic data is an inherent artifact of data synthesis
+  and MUST NOT be claimed or interpreted as evidence of real-world clinical performance.
+- Bundled AIM-94 Dataset: The dataset in ./diabetes/Diabetes-Data/ contains 1994 time-series insulin
+  and glucose logs for 70 patients; it lacks cross-sectional lipid/vital/lifestyle features and 3-class
+  labels, so it was not used to train this model.
+- Classification Scope: Categorizes current glycemic status (Healthy, Pre-diabetic, Diabetic).
+  It does NOT predict future longitudinal disease progression.
 """
 
 import os
@@ -39,13 +30,15 @@ import numpy as np
 import pandas as pd
 import joblib
 
-from sklearn.base import BaseEstimator, TransformerMixin
+from sklearn.base import BaseEstimator
 from sklearn.model_selection import train_test_split, StratifiedKFold, cross_validate
 from sklearn.pipeline import Pipeline
 from sklearn.compose import ColumnTransformer
 from sklearn.preprocessing import OneHotEncoder, RobustScaler
 from sklearn.impute import KNNImputer, SimpleImputer
 from sklearn.ensemble import RandomForestClassifier
+from sklearn.linear_model import LogisticRegression
+from sklearn.dummy import DummyClassifier
 from sklearn.metrics import (
     accuracy_score,
     precision_score,
@@ -53,10 +46,13 @@ from sklearn.metrics import (
     f1_score,
     roc_auc_score,
     confusion_matrix,
-    classification_report
+    classification_report,
+    log_loss
 )
 
-# Optional heavy ML libraries with graceful fallbacks
+from clinical_transformers import PhysiologicalOutlierCapper, PHYSIOLOGICAL_BOUNDS
+
+# Optional heavy ML libraries with explicit dependency reporting
 try:
     import xgboost as xgb
     HAS_XGB = True
@@ -119,43 +115,21 @@ CATEGORICAL_FEATURES = [
 
 ALL_FEATURES = NUMERICAL_FEATURES + CATEGORICAL_FEATURES
 
-# Physiological bounds (min, max) based on clinical survival and laboratory ranges
-PHYSIOLOGICAL_BOUNDS = {
-    "age": (18.0, 95.0),
-    "bmi": (14.0, 65.0),
-    "fasting_blood_glucose": (50.0, 400.0),
-    "hba1c": (3.8, 16.0),
-    "total_cholesterol": (90.0, 420.0),
-    "hdl_cholesterol": (15.0, 120.0),
-    "ldl_cholesterol": (35.0, 300.0),
-    "triglycerides": (35.0, 600.0),
-    "systolic_bp": (70.0, 240.0),
-    "diastolic_bp": (40.0, 140.0),
-    "serum_creatinine": (0.3, 6.0),
-    "physical_activity_minutes_per_week": (0.0, 800.0),
-    "diet_quality_score": (1.0, 10.0),
-    "sleep_hours": (3.0, 13.0),
-}
-
 
 # -----------------------------------------------------------------------------
-# Module 1: Robust Outlier Capper (Imported from clinical_transformers)
-# -----------------------------------------------------------------------------
-from clinical_transformers import PhysiologicalOutlierCapper
-# -----------------------------------------------------------------------------
-# Module 2: Medical Cohort Data Generation (ADA Criteria Aligned)
+# Module 1: Synthetic Cohort Data Generation (Educational Benchmark)
 # -----------------------------------------------------------------------------
 def generate_synthetic_clinical_cohort(n_samples: int = 4000, random_state: int = 42) -> pd.DataFrame:
     """
-    Generates a medically realistic clinical cohort of diabetic, pre-diabetic,
-    and healthy individuals adhering to American Diabetes Association (ADA)
-    diagnostic guidelines with clinical covariance, noise, missingness, and outliers.
+    Generates a synthetic clinical cohort reflecting ADA physiological guidelines.
+    IMPORTANT: This is synthetic data where labels drive the generation of several
+    biomarkers; high classification accuracy is expected and not proof of clinical efficacy.
     """
-    logger.info("Generating realistic clinical cohort (%d patients)...", n_samples)
+    logger.info("Generating synthetic clinical benchmark cohort (%d samples, seed=%d)...", n_samples, random_state)
     rng = np.random.default_rng(random_state)
 
     # Demographic distributions
-    age = rng.normal(52, 14, size=n_samples).clip(18, 90)
+    age = rng.normal(52, 14, size=n_samples).clip(18, 95)
     gender = rng.choice(["Male", "Female", "Other"], size=n_samples, p=[0.48, 0.49, 0.03])
     ethnicity = rng.choice(
         ["Caucasian", "African American", "Asian", "Hispanic", "Other"],
@@ -178,8 +152,9 @@ def generate_synthetic_clinical_cohort(n_samples: int = 4000, random_state: int 
     systolic_bp = (112 + (age * 0.38) + (bmi * 0.45) + rng.normal(0, 11, size=n_samples)).clip(85, 210)
     diastolic_bp = (72 + (age * 0.15) + (bmi * 0.28) + rng.normal(0, 7, size=n_samples)).clip(50, 125)
 
-    # Latent metabolic risk score driving ADA diagnostic thresholds
-    # Factors: Age, BMI, Family History, Sedentary life, Diet, Blood Pressure
+    # Latent metabolic risk score
+    # Note: Corrected vectorized per-patient smoking indicator
+    smoking_effect = 0.35 * (smoking == "Current").astype(float)
     risk_score = (
         0.035 * (age - 45)
         + 0.12 * (bmi - 25)
@@ -187,12 +162,11 @@ def generate_synthetic_clinical_cohort(n_samples: int = 4000, random_state: int 
         - 0.003 * (activity_min - 150)
         - 0.15 * (diet_score - 5.0)
         + 0.015 * (systolic_bp - 120)
-        + (0.35 if "Current" in smoking else 0.0)
+        + smoking_effect
         + rng.normal(0, 0.95, size=n_samples)
     )
 
     # Class assignment based on clinical risk score percentiles
-    # Creates approximately: 48% Healthy, 28% Pre-diabetic, 24% Diabetic
     labels = np.zeros(n_samples, dtype=int)
     pre_cutoff = np.percentile(risk_score, 48)
     diab_cutoff = np.percentile(risk_score, 76)
@@ -200,10 +174,7 @@ def generate_synthetic_clinical_cohort(n_samples: int = 4000, random_state: int 
     labels[(risk_score >= pre_cutoff) & (risk_score < diab_cutoff)] = 1
     labels[risk_score >= diab_cutoff] = 2
 
-    # Laboratory Panel - Fasting Glucose & HbA1c closely coupled to class and latent risk
-    # Healthy: Fasting Glucose 70-99 mg/dL, HbA1c 4.2-5.6%
-    # Pre-diabetic: Fasting Glucose 100-125 mg/dL, HbA1c 5.7-6.4%
-    # Diabetic: Fasting Glucose >= 126 mg/dL, HbA1c >= 6.5%
+    # Laboratory Panel - Fasting Glucose & HbA1c coupled to assigned class
     fbg = np.zeros(n_samples)
     hba1c = np.zeros(n_samples)
 
@@ -229,7 +200,6 @@ def generate_synthetic_clinical_cohort(n_samples: int = 4000, random_state: int 
     trig = (120 + (labels * 45) + (bmi * 1.8) + rng.normal(0, 35, size=n_samples)).clip(45, 550)
     creatinine = (0.85 + (labels * 0.25) + (age * 0.005) + rng.normal(0, 0.18, size=n_samples)).clip(0.4, 4.5)
 
-    # Assemble raw DataFrame
     df = pd.DataFrame({
         "age": age.round(1),
         "gender": gender,
@@ -253,13 +223,13 @@ def generate_synthetic_clinical_cohort(n_samples: int = 4000, random_state: int 
         "diabetes_stage": labels
     })
 
-    # Introduce realistic clinical anomalies and missingness (~5% missing lab test values)
-    logger.info("Injecting realistic missing clinical values (~5%%) and physiological outliers...")
+    # Realistic missingness (~5% missing lab values)
+    logger.info("Injecting missing clinical values (~5%% in selected labs) and physiological outliers...")
     for col in ["fasting_blood_glucose", "hba1c", "hdl_cholesterol", "triglycerides", "serum_creatinine"]:
         mask_missing = rng.random(size=n_samples) < 0.05
         df.loc[mask_missing, col] = np.nan
 
-    # Inject extreme physiological outliers (e.g. data-entry or instrumentation errors) in ~1.5% of rows
+    # Extreme data-entry outliers to exercise capper
     outlier_idx = rng.choice(n_samples, size=int(n_samples * 0.015), replace=False)
     df.loc[outlier_idx[: len(outlier_idx) // 2], "fasting_blood_glucose"] = rng.uniform(420, 650)
     df.loc[outlier_idx[len(outlier_idx) // 2:], "hba1c"] = rng.uniform(16.5, 22.0)
@@ -268,18 +238,21 @@ def generate_synthetic_clinical_cohort(n_samples: int = 4000, random_state: int 
 
 
 # -----------------------------------------------------------------------------
-# Module 3: Preprocessing Pipeline Architecture
+# Module 2: Preprocessing Pipeline Architecture
 # -----------------------------------------------------------------------------
-def build_preprocessing_pipeline() -> Tuple[Pipeline, ColumnTransformer]:
+def build_preprocessing_pipeline() -> ColumnTransformer:
     """
-    Constructs a leakage-free Scikit-Learn preprocessing pipeline:
-    - Numerical: Outlier Capper -> KNNImputer -> RobustScaler
-    - Categorical: SimpleImputer (most_frequent) -> OneHotEncoder
+    Constructs a leakage-free Scikit-Learn preprocessing pipeline.
+    Justified ordering for numerical features:
+    1. PhysiologicalOutlierCapper: bounds extreme data-entry errors.
+    2. RobustScaler: centers and scales features by median and IQR (ignores NaNs).
+    3. KNNImputer: calculates distance in the normalized metric space, ensuring
+       large-magnitude features (e.g. activity min) do not dominate subtle biomarkers.
     """
     numerical_transformer = Pipeline([
         ("capper", PhysiologicalOutlierCapper()),
-        ("imputer", KNNImputer(n_neighbors=5, weights="distance")),
         ("scaler", RobustScaler()),
+        ("imputer", KNNImputer(n_neighbors=5, weights="distance")),
     ])
 
     categorical_transformer = Pipeline([
@@ -299,11 +272,18 @@ def build_preprocessing_pipeline() -> Tuple[Pipeline, ColumnTransformer]:
 
 
 # -----------------------------------------------------------------------------
-# Module 4: Model Training, K-Fold CV & Hyperparameter Optimization
+# Module 3: Model Instantiation with Explicit Dependency Handling
 # -----------------------------------------------------------------------------
 def get_classifier(model_type: str = "rf", random_state: int = 42) -> BaseEstimator:
-    """Instantiates the requested multi-class classifier with balanced weighting."""
-    if model_type == "xgb" and HAS_XGB:
+    """
+    Instantiates requested classifier. Does NOT silently substitute dependencies.
+    """
+    if model_type == "xgb":
+        if not HAS_XGB:
+            raise RuntimeError(
+                "XGBoost was explicitly requested (--model xgb), but cannot be loaded. "
+                "Ensure xgboost is installed and OpenMP runtime (libomp.dylib / libgomp.so) is present."
+            )
         logger.info("Selected XGBoost multi-class classifier.")
         return xgb.XGBClassifier(
             objective="multi:softprob",
@@ -316,7 +296,12 @@ def get_classifier(model_type: str = "rf", random_state: int = 42) -> BaseEstima
             eval_metric="mlogloss",
             random_state=random_state,
         )
-    elif model_type == "lgb" and HAS_LGB:
+    elif model_type == "lgb":
+        if not HAS_LGB:
+            raise RuntimeError(
+                "LightGBM was explicitly requested (--model lgb), but cannot be loaded. "
+                "Ensure lightgbm is installed and available."
+            )
         logger.info("Selected LightGBM multi-class classifier.")
         return lgb.LGBMClassifier(
             objective="multiclass",
@@ -327,7 +312,7 @@ def get_classifier(model_type: str = "rf", random_state: int = 42) -> BaseEstima
             max_depth=5,
             random_state=random_state,
         )
-    else:
+    elif model_type == "rf":
         logger.info("Selected Random Forest multi-class classifier with balanced class weights.")
         return RandomForestClassifier(
             n_estimators=250,
@@ -338,24 +323,107 @@ def get_classifier(model_type: str = "rf", random_state: int = 42) -> BaseEstima
             random_state=random_state,
             n_jobs=-1,
         )
+    else:
+        raise ValueError(f"Unsupported model type '{model_type}'. Choose from 'rf', 'xgb', 'lgb'.")
 
 
+# -----------------------------------------------------------------------------
+# Module 4: Baselines Evaluation
+# -----------------------------------------------------------------------------
+def evaluate_baselines(
+    X_train: pd.DataFrame,
+    y_train: pd.Series,
+    X_test: pd.DataFrame,
+    y_test: pd.Series,
+    preprocessor: ColumnTransformer,
+    random_state: int = 42
+) -> Dict[str, Any]:
+    """
+    Evaluates baseline models on the exact same hold-out test set:
+    1. Majority-class DummyClassifier
+    2. LogisticRegression (with balanced class weights)
+    3. Transparent ADA clinical rule heuristic (FBG >= 126 or HbA1c >= 6.5 -> Diabetic)
+    """
+    logger.info("Evaluating comparative baseline models on hold-out test set...")
+
+    # Baseline 1: Dummy Majority
+    dummy = DummyClassifier(strategy="most_frequent")
+    dummy.fit(X_train, y_train)
+    y_pred_dummy = dummy.predict(X_test)
+    dummy_acc = float(accuracy_score(y_test, y_pred_dummy))
+    dummy_f1 = float(f1_score(y_test, y_pred_dummy, average="macro", zero_division=0))
+
+    # Baseline 2: Logistic Regression (inside full preprocessor pipeline)
+    log_reg_pipeline = Pipeline([
+        ("preprocessor", preprocessor),
+        ("classifier", LogisticRegression(class_weight="balanced", max_iter=1000, random_state=random_state))
+    ])
+    log_reg_pipeline.fit(X_train, y_train)
+    y_pred_lr = log_reg_pipeline.predict(X_test)
+    lr_acc = float(accuracy_score(y_test, y_pred_lr))
+    lr_f1 = float(f1_score(y_test, y_pred_lr, average="macro", zero_division=0))
+
+    # Baseline 3: Deterministic ADA Rule Heuristic
+    y_pred_rule = np.zeros(len(X_test), dtype=int)
+    for idx, (_, row) in enumerate(X_test.iterrows()):
+        fbg = row.get("fasting_blood_glucose")
+        hba1c = row.get("hba1c")
+        if (hba1c is not None and not pd.isna(hba1c) and hba1c >= 6.5) or (
+            fbg is not None and not pd.isna(fbg) and fbg >= 126.0
+        ):
+            y_pred_rule[idx] = 2  # Diabetic
+        elif (hba1c is not None and not pd.isna(hba1c) and hba1c >= 5.7) or (
+            fbg is not None and not pd.isna(fbg) and fbg >= 100.0
+        ):
+            y_pred_rule[idx] = 1  # Pre-diabetic
+        else:
+            y_pred_rule[idx] = 0  # Healthy
+
+    rule_acc = float(accuracy_score(y_test, y_pred_rule))
+    rule_f1 = float(f1_score(y_test, y_pred_rule, average="macro", zero_division=0))
+
+    baselines = {
+        "majority_class_dummy": {
+            "model": "DummyClassifier(strategy='most_frequent')",
+            "accuracy": round(dummy_acc, 4),
+            "f1_macro": round(dummy_f1, 4),
+            "description": "Always predicts the most frequent class in the training partition."
+        },
+        "logistic_regression": {
+            "model": "LogisticRegression(class_weight='balanced')",
+            "accuracy": round(lr_acc, 4),
+            "f1_macro": round(lr_f1, 4),
+            "description": "Standard linear multi-class baseline with balanced weighting."
+        },
+        "ada_rule_heuristic": {
+            "model": "ADA Standard Threshold Heuristic",
+            "accuracy": round(rule_acc, 4),
+            "f1_macro": round(rule_f1, 4),
+            "description": "Deterministic rule: Diabetic if FBG>=126 or HbA1c>=6.5; Pre-diabetic if FBG>=100 or HbA1c>=5.7; else Healthy."
+        }
+    }
+    return baselines
+
+
+# -----------------------------------------------------------------------------
+# Module 5: Model Training, K-Fold CV & Hold-out Evaluation
+# -----------------------------------------------------------------------------
 def train_and_validate_pipeline(
     X: pd.DataFrame,
     y: pd.Series,
     model_type: str = "rf",
     cv_folds: int = 5,
     random_state: int = 42
-) -> Tuple[Pipeline, Dict[str, Any], np.ndarray, np.ndarray, pd.DataFrame, pd.Series]:
+) -> Tuple[Pipeline, Dict[str, Any], np.ndarray, np.ndarray, pd.DataFrame, pd.Series, pd.DataFrame, pd.Series, Dict[str, Any]]:
     """
-    Executes strict train/test split, k-fold cross validation, and trains final pipeline.
+    Executes strict train/test split, k-fold cross validation, and baseline comparisons.
     """
     logger.info("Performing Stratified 80/20 Train/Test Split...")
     X_train, X_test, y_train, y_test = train_test_split(
         X, y, test_size=0.20, stratify=y, random_state=random_state
     )
 
-    logger.info("Train set shape: %s | Test set shape: %s", X_train.shape, X_test.shape)
+    logger.info("Train partition: %d samples | Test partition: %d samples", len(X_train), len(X_test))
     preprocessor = build_preprocessing_pipeline()
     classifier = get_classifier(model_type=model_type, random_state=random_state)
 
@@ -364,8 +432,8 @@ def train_and_validate_pipeline(
         ("classifier", classifier)
     ])
 
-    # 5-Fold Stratified Cross Validation on Training Data
-    logger.info("Executing Stratified %d-Fold Cross-Validation on training data...", cv_folds)
+    # 5-Fold Stratified Cross Validation on Training Data Only
+    logger.info("Executing Stratified %d-Fold Cross-Validation on training data only...", cv_folds)
     cv = StratifiedKFold(n_splits=cv_folds, shuffle=True, random_state=random_state)
     cv_scoring = ["accuracy", "f1_macro", "precision_macro", "recall_macro"]
     cv_results = cross_validate(full_pipeline, X_train, y_train, cv=cv, scoring=cv_scoring, n_jobs=-1)
@@ -379,39 +447,37 @@ def train_and_validate_pipeline(
         "cv_recall_macro_mean": float(np.mean(cv_results["test_recall_macro"])),
     }
     logger.info(
-        "K-Fold CV Results -> Accuracy: %.3f (+/- %.3f), F1-Macro: %.3f (+/- %.3f)",
+        "K-Fold CV Results -> Accuracy: %.4f (+/- %.4f), F1-Macro: %.4f (+/- %.4f)",
         cv_metrics["cv_accuracy_mean"],
         cv_metrics["cv_accuracy_std"],
         cv_metrics["cv_f1_macro_mean"],
         cv_metrics["cv_f1_macro_std"],
     )
 
-    # Train final model on entire training partition
-    logger.info("Fitting complete preprocessing and classifier pipeline on X_train...")
+    # Train final model on complete training partition
+    logger.info("Fitting complete pipeline on X_train...")
     full_pipeline.fit(X_train, y_train)
 
-    # Inference on hold-out test set
+    # Evaluate comparative baselines
+    baselines = evaluate_baselines(X_train, y_train, X_test, y_test, build_preprocessing_pipeline(), random_state=random_state)
+
+    # Holdout inference
     logger.info("Running inference on hold-out test set...")
     y_pred = full_pipeline.predict(X_test)
     y_prob = full_pipeline.predict_proba(X_test)
 
-    return full_pipeline, cv_metrics, y_pred, y_prob, X_test, y_test
+    return full_pipeline, cv_metrics, y_pred, y_prob, X_test, y_test, X_train, y_train, baselines
 
 
-# -----------------------------------------------------------------------------
-# Module 5: Comprehensive Performance Metric Evaluation
-# -----------------------------------------------------------------------------
 def evaluate_test_performance(
     y_test: pd.Series,
     y_pred: np.ndarray,
     y_prob: np.ndarray,
-    cv_metrics: Dict[str, Any]
+    cv_metrics: Dict[str, Any],
+    baselines: Dict[str, Any]
 ) -> Dict[str, Any]:
     """
-    Computes hold-out test metrics:
-    - Accuracy, Precision (Macro/Weighted), Recall (Macro/Weighted), F1 (Macro/Weighted)
-    - ROC-AUC (One-vs-Rest) per class and macro/weighted average
-    - Multi-class Confusion Matrix with clinical specificity/sensitivity
+    Computes hold-out test metrics and calibration loss.
     """
     acc = accuracy_score(y_test, y_pred)
     prec_macro = precision_score(y_test, y_pred, average="macro", zero_division=0)
@@ -421,7 +487,13 @@ def evaluate_test_performance(
     f1_macro = f1_score(y_test, y_pred, average="macro", zero_division=0)
     f1_weighted = f1_score(y_test, y_pred, average="weighted", zero_division=0)
 
-    # One-vs-Rest ROC-AUC calculation
+    # Multi-class log loss as probability calibration indicator
+    try:
+        test_log_loss = float(log_loss(y_test, y_prob))
+    except Exception:
+        test_log_loss = None
+
+    # One-vs-Rest ROC-AUC
     roc_auc_per_class = roc_auc_score(y_test, y_prob, multi_class="ovr", average=None)
     roc_auc_macro = roc_auc_score(y_test, y_prob, multi_class="ovr", average="macro")
     roc_auc_weighted = roc_auc_score(y_test, y_prob, multi_class="ovr", average="weighted")
@@ -444,6 +516,7 @@ def evaluate_test_performance(
     report = classification_report(y_test, y_pred, target_names=CLASS_NAMES, output_dict=True)
 
     metrics = {
+        "dataset_type": "synthetic",
         "accuracy": round(float(acc), 4),
         "precision_macro": round(float(prec_macro), 4),
         "precision_weighted": round(float(prec_weighted), 4),
@@ -451,6 +524,7 @@ def evaluate_test_performance(
         "recall_weighted": round(float(rec_weighted), 4),
         "f1_macro": round(float(f1_macro), 4),
         "f1_weighted": round(float(f1_weighted), 4),
+        "calibration_log_loss": round(test_log_loss, 4) if test_log_loss is not None else None,
         "roc_auc_macro": round(float(roc_auc_macro), 4),
         "roc_auc_weighted": round(float(roc_auc_weighted), 4),
         "roc_auc_per_class": {
@@ -460,21 +534,31 @@ def evaluate_test_performance(
         "confusion_matrix": cm_dict,
         "classification_report": report,
         "cross_validation": cv_metrics,
+        "baselines_comparison": baselines,
     }
 
     return metrics
 
 
 def display_metrics_dashboard(metrics: Dict[str, Any]):
-    """Pretty-prints the comprehensive clinical evaluation report to console."""
+    """Pretty-prints evaluation report with explicit synthetic data framing."""
     print("\n" + "=" * 78)
-    print("      CLINICAL VALIDATION REPORT: 3-TIER DIABETES PREDICTION MODEL")
+    print("   MODEL EVALUATION REPORT (EDUCATIONAL PROTOTYPE - SYNTHETIC DATASET)")
     print("=" * 78)
+    print("NOTICE: Evaluated on synthetic benchmark data. Performance metrics reflect")
+    print("synthetic cohort distributions and DO NOT denote real-world clinical efficacy.")
+    print("-" * 78)
     print(f"Overall Hold-Out Accuracy:    {metrics['accuracy'] * 100:.2f}%")
     print(f"F1-Score (Macro Average):     {metrics['f1_macro']:.4f}")
     print(f"F1-Score (Weighted Average):  {metrics['f1_weighted']:.4f}")
     print(f"Precision (Macro / Weighted): {metrics['precision_macro']:.4f} / {metrics['precision_weighted']:.4f}")
     print(f"Recall (Macro / Weighted):    {metrics['recall_macro']:.4f} / {metrics['recall_weighted']:.4f}")
+    if metrics.get("calibration_log_loss") is not None:
+        print(f"Test Multi-Class Log Loss:    {metrics['calibration_log_loss']:.4f}")
+    print("-" * 78)
+    print("Comparative Baseline Models (Hold-Out Test Set):")
+    for name, b in metrics["baselines_comparison"].items():
+        print(f"  * {b['model']:<46} -> Acc: {b['accuracy']:.4f} | F1-Macro: {b['f1_macro']:.4f}")
     print("-" * 78)
     print("One-vs-Rest (OvR) ROC-AUC Scores:")
     for cls_name, score in metrics["roc_auc_per_class"].items():
@@ -490,11 +574,6 @@ def display_metrics_dashboard(metrics: Dict[str, Any]):
     for i, row in enumerate(cm):
         cls_name = CLASS_NAMES[i]
         print(f"{cls_name:<16} | {row[0]:<10} | {row[1]:<12} | {row[2]:<10}")
-    print("-" * 78)
-    print("Clinical Sensitivity (Recall) per Risk Tier:")
-    for cls_name, info in metrics["confusion_matrix"]["breakdown"].items():
-        pct = info["sensitivity_recall"] * 100
-        print(f"  * {cls_name:<16} Sensitivity: {pct:6.2f}% ({info['correct_predictions']}/{info['total_actual']})")
     print("=" * 78 + "\n")
 
 
@@ -503,34 +582,30 @@ def display_metrics_dashboard(metrics: Dict[str, Any]):
 # -----------------------------------------------------------------------------
 def setup_shap_explainer(pipeline: Pipeline, X_train_sample: pd.DataFrame) -> Tuple[Any, List[str]]:
     """
-    Initializes a SHAP TreeExplainer for multi-class tree ensembles.
-    Returns the explainer and the transformed feature names.
+    Initializes SHAP TreeExplainer using background data sampled STRICTLY from X_train.
     """
-    logger.info("Initializing SHAP TreeExplainer...")
+    logger.info("Initializing SHAP TreeExplainer with %d training background samples...", len(X_train_sample))
     preprocessor = pipeline.named_steps["preprocessor"]
     model = pipeline.named_steps["classifier"]
 
     # Transform background dataset
     X_train_trans = preprocessor.transform(X_train_sample)
 
-    # Extract transformed feature names
     cat_encoder = preprocessor.named_transformers_["cat"].named_steps["encoder"]
     encoded_cat_names = cat_encoder.get_feature_names_out(CATEGORICAL_FEATURES).tolist()
     feature_names = NUMERICAL_FEATURES + encoded_cat_names
 
     if HAS_SHAP:
         try:
-            # Random forest / tree explainer
-            explainer = shap.TreeExplainer(model, data=shap.sample(X_train_trans, 100))
-            logger.info("SHAP TreeExplainer successfully created with %d background samples.", 100)
+            explainer = shap.TreeExplainer(model, data=X_train_trans)
+            logger.info("SHAP TreeExplainer successfully initialized.")
             return explainer, feature_names
         except Exception as e:
-            logger.warning("Standard SHAP TreeExplainer initialization notice: %s. Using KernelExplainer fallback.", e)
-            predict_fn = model.predict_proba
-            explainer = shap.KernelExplainer(predict_fn, shap.sample(X_train_trans, 50))
+            logger.warning("SHAP TreeExplainer notice: %s. Using KernelExplainer fallback.", e)
+            explainer = shap.KernelExplainer(model.predict_proba, X_train_trans[:50])
             return explainer, feature_names
     else:
-        logger.warning("SHAP library not installed. Creating native surrogate attribution explainer.")
+        logger.warning("SHAP library not installed or failed to initialize.")
         return None, feature_names
 
 
@@ -539,11 +614,12 @@ def explain_single_patient(
     pipeline: Pipeline,
     explainer: Any,
     feature_names: List[str],
-    top_k: int = 5
+    top_k: int = 6
 ) -> Dict[str, Any]:
     """
-    Computes local SHAP feature attributions for an individual patient record,
-    returning a ranked list of driving features (both risk-increasing and protective).
+    Computes local SHAP attributions labeled RELATIVE TO THE EXPLAINED CLASS.
+    Extracts actual base value from explainer, checks additivity, and handles
+    unavailable explanations truthfully.
     """
     patient_df = pd.DataFrame([patient_dict])
     preprocessor = pipeline.named_steps["preprocessor"]
@@ -554,72 +630,114 @@ def explain_single_patient(
     pred_class_id = int(np.argmax(probs))
     pred_class_name = CLASS_NAMES[pred_class_id]
 
-    top_features = []
+    if not HAS_SHAP or explainer is None:
+        return {
+            "status": "unavailable",
+            "reason": "SHAP explainer artifact is not available.",
+            "explained_class": pred_class_name,
+            "explained_class_id": pred_class_id,
+            "output_space": "probability",
+            "base_value": None,
+            "confidence": round(float(probs[pred_class_id]), 4),
+            "class_probabilities": {CLASS_NAMES[i]: round(float(probs[i]), 4) for i in range(len(CLASS_NAMES))},
+            "top_features": [],
+            "omitted_features_shap_sum": None,
+            "additivity_check": None,
+        }
 
-    if HAS_SHAP and explainer is not None:
-        try:
-            raw_shap = explainer.shap_values(X_patient_trans)
-            # Depending on SHAP version: raw_shap can be a list of 3 arrays (one per class)
-            # or a 3D array of shape (samples, features, classes)
-            if isinstance(raw_shap, list):
-                class_shap_vals = raw_shap[pred_class_id][0]
-            elif hasattr(raw_shap, "values"):
-                class_shap_vals = raw_shap.values[0, :, pred_class_id]
-            elif raw_shap.ndim == 3:
-                class_shap_vals = raw_shap[0, :, pred_class_id]
+    try:
+        # Extract actual expected value from the explainer for pred_class_id
+        ev = explainer.expected_value
+        if isinstance(ev, (list, np.ndarray)):
+            base_value = float(ev[pred_class_id])
+        else:
+            base_value = float(ev)
+
+        raw_shap = explainer.shap_values(X_patient_trans)
+        if isinstance(raw_shap, list):
+            class_shap_vals = raw_shap[pred_class_id][0]
+        elif hasattr(raw_shap, "values"):
+            class_shap_vals = raw_shap.values[0, :, pred_class_id]
+        elif raw_shap.ndim == 3:
+            class_shap_vals = raw_shap[0, :, pred_class_id]
+        else:
+            class_shap_vals = raw_shap[0]
+
+        # Aggregate one-hot dummy features back into parent feature groups
+        feature_impacts: Dict[str, float] = {}
+        for name, s_val in zip(feature_names, class_shap_vals):
+            matched_cat = next((cat for cat in CATEGORICAL_FEATURES if name.startswith(cat)), None)
+            root = matched_cat if matched_cat else name
+            feature_impacts[root] = feature_impacts.get(root, 0.0) + float(s_val)
+
+        # Validate additivity: base_value + sum(all_features) ≈ model output
+        all_shap_sum = float(sum(feature_impacts.values()))
+        reconstructed = base_value + all_shap_sum
+        model_prob = float(probs[pred_class_id])
+        additivity_diff = abs(reconstructed - model_prob)
+
+        # Sort features by absolute contribution magnitude
+        sorted_feats = sorted(feature_impacts.items(), key=lambda x: abs(x[1]), reverse=True)
+
+        top_features = []
+        for feat, val in sorted_feats[:top_k]:
+            patient_val = patient_dict.get(feat, "N/A")
+            # Label relative to explained class
+            if val > 0:
+                impact_label = f"Supports {pred_class_name} prediction"
+                direction = "supports"
+            elif val < 0:
+                impact_label = f"Opposes {pred_class_name} prediction"
+                direction = "opposes"
             else:
-                class_shap_vals = raw_shap[0]
+                impact_label = f"Neutral regarding {pred_class_name}"
+                direction = "neutral"
 
-            # Aggregate one-hot encoded categories back to original feature groups for clinical readability
-            feature_impacts = {}
-            for name, s_val in zip(feature_names, class_shap_vals):
-                # Identify root feature
-                root = name.split("_")[0] if any(cat in name for cat in CATEGORICAL_FEATURES) else name
-                matched_cat = next((cat for cat in CATEGORICAL_FEATURES if name.startswith(cat)), None)
-                if matched_cat:
-                    root = matched_cat
-                feature_impacts[root] = feature_impacts.get(root, 0.0) + float(s_val)
-
-            # Sort features by absolute attribution magnitude
-            sorted_feats = sorted(feature_impacts.items(), key=lambda x: abs(x[1]), reverse=True)
-
-            for feat, val in sorted_feats[:top_k]:
-                patient_val = patient_dict.get(feat, "N/A")
-                direction = "increases_risk" if val > 0 else "reduces_risk"
-                top_features.append({
-                    "feature": feat,
-                    "patient_value": patient_val,
-                    "shap_value": round(val, 4),
-                    "impact": "Increases risk" if val > 0 else "Protective factor",
-                    "direction": direction,
-                })
-        except Exception as err:
-            logger.warning("SHAP calculation fallback: %s", err)
-
-    # Fallback to feature importance surrogate if SHAP not initialized
-    if not top_features and hasattr(model, "feature_importances_"):
-        importances = model.feature_importances_
-        sorted_idx = np.argsort(importances)[::-1][:top_k]
-        for idx in sorted_idx:
-            feat_name = feature_names[idx] if idx < len(feature_names) else f"feature_{idx}"
-            clean_name = feat_name.split("_")[0] if any(cat in feat_name for cat in CATEGORICAL_FEATURES) else feat_name
             top_features.append({
-                "feature": clean_name,
-                "patient_value": patient_dict.get(clean_name, "N/A"),
-                "shap_value": round(float(importances[idx]), 4),
-                "impact": "Primary predictive driver",
-                "direction": "increases_risk",
+                "feature": feat,
+                "patient_value": patient_val,
+                "shap_value": round(float(val), 4),
+                "impact": impact_label,
+                "direction": direction,
             })
 
-    return {
-        "predicted_class": pred_class_name,
-        "predicted_class_id": pred_class_id,
-        "confidence": round(float(probs[pred_class_id]), 4),
-        "class_probabilities": {
-            CLASS_NAMES[i]: round(float(probs[i]), 4) for i in range(len(CLASS_NAMES))
-        },
-        "top_features": top_features
-    }
+        top_sum = float(sum(f["shap_value"] for f in top_features))
+        omitted_sum = round(all_shap_sum - top_sum, 4)
+
+        return {
+            "status": "available",
+            "explained_class": pred_class_name,
+            "explained_class_id": pred_class_id,
+            "output_space": "probability",
+            "base_value": round(base_value, 4),
+            "confidence": round(float(probs[pred_class_id]), 4),
+            "class_probabilities": {CLASS_NAMES[i]: round(float(probs[i]), 4) for i in range(len(CLASS_NAMES))},
+            "top_features": top_features,
+            "omitted_features_shap_sum": omitted_sum,
+            "additivity_check": {
+                "base_value": round(base_value, 4),
+                "all_features_shap_sum": round(all_shap_sum, 4),
+                "reconstructed_output": round(reconstructed, 4),
+                "model_output": round(model_prob, 4),
+                "absolute_difference": round(additivity_diff, 5),
+                "is_additive": bool(additivity_diff < 0.05),
+            }
+        }
+    except Exception as err:
+        logger.warning("SHAP explanation failed: %s", err)
+        return {
+            "status": "unavailable",
+            "reason": f"Calculation error: {str(err)}",
+            "explained_class": pred_class_name,
+            "explained_class_id": pred_class_id,
+            "output_space": "probability",
+            "base_value": None,
+            "confidence": round(float(probs[pred_class_id]), 4),
+            "class_probabilities": {CLASS_NAMES[i]: round(float(probs[i]), 4) for i in range(len(CLASS_NAMES))},
+            "top_features": [],
+            "omitted_features_shap_sum": None,
+            "additivity_check": None,
+        }
 
 
 # -----------------------------------------------------------------------------
@@ -633,28 +751,25 @@ def run_pipeline(
     random_state: int = 42
 ) -> Dict[str, Any]:
     """
-    Main orchestration routine:
-    1. Loads or generates clinical cohort
-    2. Executes outlier capping & KNN imputation pipeline
-    3. Runs Stratified K-Fold CV & model training
-    4. Evaluates comprehensive holdout performance metrics
-    5. Builds SHAP explainability model
-    6. Saves all artifacts to disk
+    Main orchestration routine.
     """
     os.makedirs(output_dir, exist_ok=True)
 
-    # Step 1: Ingest or Generate Data
-    if data_path and os.path.exists(data_path):
-        logger.info("Loading patient cohort dataset from: %s", data_path)
+    # Ingest Data or explicitly fail if missing
+    if data_path:
+        if not os.path.exists(data_path):
+            raise FileNotFoundError(f"Explicitly supplied dataset path '{data_path}' was not found.")
+        logger.info("Loading patient cohort dataset from supplied path: %s", data_path)
         df = pd.read_csv(data_path)
+        dataset_source = f"external_file: {data_path}"
     else:
-        logger.info("No external dataset specified or file not found. Generating ADA clinical benchmark dataset...")
+        logger.info("No external dataset specified. Generating ADA synthetic clinical benchmark cohort...")
         df = generate_synthetic_clinical_cohort(n_samples=n_samples, random_state=random_state)
         csv_save_path = os.path.join(output_dir, "diabetes_clinical_dataset.csv")
         df.to_csv(csv_save_path, index=False)
-        logger.info("Generated dataset saved to %s", csv_save_path)
+        logger.info("Synthetic benchmark dataset saved to %s", csv_save_path)
+        dataset_source = "synthetic_ada_benchmark"
 
-    # Step 2: Separate features and target
     target_col = "diabetes_stage"
     if target_col not in df.columns:
         raise ValueError(f"Target column '{target_col}' not found in dataset. Columns: {df.columns.tolist()}")
@@ -662,19 +777,30 @@ def run_pipeline(
     X = df[ALL_FEATURES]
     y = df[target_col].astype(int)
 
-    # Step 3: Train and Validate Pipeline
-    pipeline, cv_metrics, y_pred, y_prob, X_test, y_test = train_and_validate_pipeline(
+    # Train, Cross-Validate, and Evaluate Baselines
+    (
+        pipeline,
+        cv_metrics,
+        y_pred,
+        y_prob,
+        X_test,
+        y_test,
+        X_train,
+        y_train,
+        baselines
+    ) = train_and_validate_pipeline(
         X, y, model_type=model_type, cv_folds=5, random_state=random_state
     )
 
-    # Step 4: Evaluate Test Metrics
-    metrics = evaluate_test_performance(y_test, y_pred, y_prob, cv_metrics)
+    # Evaluate Test Metrics
+    metrics = evaluate_test_performance(y_test, y_pred, y_prob, cv_metrics, baselines)
     display_metrics_dashboard(metrics)
 
-    # Step 5: Setup SHAP Explainer
-    explainer, feature_names = setup_shap_explainer(pipeline, X.sample(n=min(300, len(X)), random_state=random_state))
+    # Setup SHAP Explainer (Sample strictly from X_train to prevent leakage)
+    X_train_bg = X_train.sample(n=min(150, len(X_train)), random_state=random_state)
+    explainer, feature_names = setup_shap_explainer(pipeline, X_train_bg)
 
-    # Step 6: Test Single Patient Explanation Demo
+    # Verify Single Patient Explanation Demo
     sample_patient = {
         "age": 56.0,
         "gender": "Male",
@@ -698,11 +824,11 @@ def run_pipeline(
     }
     demo_explanation = explain_single_patient(sample_patient, pipeline, explainer, feature_names)
     logger.info("Sample Patient Inference Demo: Class=%s (Conf: %.2f)",
-                demo_explanation["predicted_class"], demo_explanation["confidence"])
+                demo_explanation["explained_class"], demo_explanation["confidence"])
     for f in demo_explanation["top_features"]:
-        logger.info("   -> Feature '%s' (value=%s, SHAP impact=%s)", f["feature"], f["patient_value"], f["shap_value"])
+        logger.info("   -> Feature '%s' (value=%s, SHAP=%s: %s)", f["feature"], f["patient_value"], f["shap_value"], f["impact"])
 
-    # Step 7: Serialize Artifacts
+    # Persist Artifacts
     pipeline_path = os.path.join(output_dir, "model_pipeline.joblib")
     explainer_path = os.path.join(output_dir, "explainer.joblib")
     metrics_path = os.path.join(output_dir, "model_metrics.json")
@@ -713,12 +839,23 @@ def run_pipeline(
         try:
             joblib.dump(explainer, explainer_path)
         except Exception as e:
-            logger.warning("Could not joblib serialize full explainer (%s). Explanations will run dynamically.", e)
+            logger.warning("Could not serialize explainer: %s", e)
 
     with open(metrics_path, "w", encoding="utf-8") as f:
         json.dump(metrics, f, indent=2)
 
     metadata = {
+        "model_version": "1.1.0-educational",
+        "dataset_source": dataset_source,
+        "dataset_type": "synthetic",
+        "total_samples": len(df),
+        "train_samples": len(X_train),
+        "test_samples": len(X_test),
+        "class_distribution": {CLASS_NAMES[k]: int(v) for k, v in y.value_counts().items()},
+        "split_strategy": "stratified_80_20",
+        "random_seed": random_state,
+        "model_type": model_type,
+        "estimator": type(pipeline.named_steps["classifier"]).__name__,
         "numerical_features": NUMERICAL_FEATURES,
         "categorical_features": CATEGORICAL_FEATURES,
         "all_features": ALL_FEATURES,
@@ -726,12 +863,11 @@ def run_pipeline(
         "class_mapping": CLASS_MAP,
         "classes": CLASS_NAMES,
         "physiological_bounds": PHYSIOLOGICAL_BOUNDS,
-        "model_type": model_type,
     }
     with open(metadata_path, "w", encoding="utf-8") as f:
         json.dump(metadata, f, indent=2)
 
-    logger.info("Pipeline executed successfully! Artifacts written to %s", output_dir)
+    logger.info("Pipeline execution complete! Artifacts saved in %s", output_dir)
     return metrics
 
 
@@ -739,7 +875,7 @@ def run_pipeline(
 # CLI Entrypoint
 # -----------------------------------------------------------------------------
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="End-to-End Clinical Diabetes Risk ML Pipeline")
+    parser = argparse.ArgumentParser(description="Clinical Diabetes Risk ML Pipeline (Educational Prototype)")
     parser.add_argument("--data", type=str, default=None, help="Path to clinical CSV dataset")
     parser.add_argument("--out", type=str, default="artifacts", help="Output directory for saved artifacts")
     parser.add_argument("--model", type=str, choices=["rf", "xgb", "lgb"], default="rf", help="Classifier algorithm")
