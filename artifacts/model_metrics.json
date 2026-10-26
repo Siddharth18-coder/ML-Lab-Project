@@ -1,36 +1,37 @@
 {
-  "dataset_type": "synthetic",
-  "accuracy": 0.99,
-  "precision_macro": 0.988,
-  "precision_weighted": 0.99,
-  "recall_macro": 0.988,
-  "recall_weighted": 0.99,
-  "f1_macro": 0.988,
-  "f1_weighted": 0.99,
-  "calibration_log_loss": 0.0947,
-  "roc_auc_macro": 0.9995,
-  "roc_auc_weighted": 0.9996,
+  "dataset_type": "real_cdc_brfss_2015",
+  "sample_count": 10000,
+  "accuracy": 0.688,
+  "precision_macro": 0.4339,
+  "precision_weighted": 0.845,
+  "recall_macro": 0.5017,
+  "recall_weighted": 0.688,
+  "f1_macro": 0.4304,
+  "f1_weighted": 0.7399,
+  "calibration_log_loss": 0.7647,
+  "roc_auc_macro": 0.7619,
+  "roc_auc_weighted": 0.818,
   "roc_auc_per_class": {
-    "Healthy": 0.9999,
-    "Pre-diabetic": 0.9991,
-    "Diabetic": 0.9994
+    "Healthy": 0.8208,
+    "Pre-diabetic": 0.6408,
+    "Diabetic": 0.8243
   },
   "confusion_matrix": {
     "matrix": [
       [
-        383,
-        1,
-        0
+        5857,
+        625,
+        1930
       ],
       [
-        1,
-        220,
-        3
+        69,
+        17,
+        98
       ],
       [
-        0,
-        3,
-        189
+        248,
+        150,
+        1006
       ]
     ],
     "classes": [
@@ -40,81 +41,81 @@
     ],
     "breakdown": {
       "Healthy": {
-        "total_actual": 384,
-        "correct_predictions": 383,
-        "sensitivity_recall": 0.9973958333333334
+        "total_actual": 8412,
+        "correct_predictions": 5857,
+        "sensitivity_recall": 0.6962672372800761
       },
       "Pre-diabetic": {
-        "total_actual": 224,
-        "correct_predictions": 220,
-        "sensitivity_recall": 0.9821428571428571
+        "total_actual": 184,
+        "correct_predictions": 17,
+        "sensitivity_recall": 0.09239130434782608
       },
       "Diabetic": {
-        "total_actual": 192,
-        "correct_predictions": 189,
-        "sensitivity_recall": 0.984375
+        "total_actual": 1404,
+        "correct_predictions": 1006,
+        "sensitivity_recall": 0.7165242165242165
       }
     }
   },
   "classification_report": {
     "Healthy": {
-      "precision": 0.9973958333333334,
-      "recall": 0.9973958333333334,
-      "f1-score": 0.9973958333333334,
-      "support": 384.0
+      "precision": 0.9486556527372854,
+      "recall": 0.6962672372800761,
+      "f1-score": 0.8030988619223913,
+      "support": 8412.0
     },
     "Pre-diabetic": {
-      "precision": 0.9821428571428571,
-      "recall": 0.9821428571428571,
-      "f1-score": 0.9821428571428571,
-      "support": 224.0
+      "precision": 0.021464646464646464,
+      "recall": 0.09239130434782608,
+      "f1-score": 0.03483606557377049,
+      "support": 184.0
     },
     "Diabetic": {
-      "precision": 0.984375,
-      "recall": 0.984375,
-      "f1-score": 0.984375,
-      "support": 192.0
+      "precision": 0.3315754779169413,
+      "recall": 0.7165242165242165,
+      "f1-score": 0.4533573681838666,
+      "support": 1404.0
     },
-    "accuracy": 0.99,
+    "accuracy": 0.688,
     "macro avg": {
-      "precision": 0.9879712301587302,
-      "recall": 0.9879712301587302,
-      "f1-score": 0.9879712301587302,
-      "support": 800.0
+      "precision": 0.4338985923729577,
+      "recall": 0.5017275860507062,
+      "f1-score": 0.4304307652266761,
+      "support": 10000.0
     },
     "weighted avg": {
-      "precision": 0.99,
-      "recall": 0.99,
-      "f1-score": 0.99,
-      "support": 800.0
+      "precision": 0.8449572816770926,
+      "recall": 0.688,
+      "f1-score": 0.7398591207486878,
+      "support": 10000.0
     }
   },
   "cross_validation": {
-    "cv_accuracy_mean": 0.9884375000000001,
-    "cv_accuracy_std": 0.0021194781197266307,
-    "cv_f1_macro_mean": 0.9864700980606423,
-    "cv_f1_macro_std": 0.002527747793086558,
-    "cv_precision_macro_mean": 0.9869561878711088,
-    "cv_recall_macro_mean": 0.9860911033377666
+    "cv_accuracy_mean": 0.688875,
+    "cv_accuracy_std": 0.0052979949037348035,
+    "cv_f1_macro_mean": 0.43527179499847063,
+    "cv_f1_macro_std": 0.005418696580051858,
+    "cv_precision_macro_mean": 0.43560808643689,
+    "cv_recall_macro_mean": 0.5158316507725825
   },
   "baselines_comparison": {
     "majority_class_dummy": {
       "model": "DummyClassifier(strategy='most_frequent')",
-      "accuracy": 0.48,
-      "f1_macro": 0.2162,
-      "description": "Always predicts the most frequent class in the training partition."
+      "accuracy": 0.8412,
+      "f1_macro": 0.3046,
+      "description": "Always predicts the most frequent training class (Healthy)."
     },
     "logistic_regression": {
       "model": "LogisticRegression(class_weight='balanced')",
-      "accuracy": 0.9688,
-      "f1_macro": 0.9658,
+      "accuracy": 0.6435,
+      "f1_macro": 0.4271,
       "description": "Standard linear multi-class baseline with balanced weighting."
     },
-    "ada_rule_heuristic": {
-      "model": "ADA Standard Threshold Heuristic",
-      "accuracy": 0.9325,
-      "f1_macro": 0.9239,
-      "description": "Deterministic rule: Diabetic if FBG>=126 or HbA1c>=6.5; Pre-diabetic if FBG>=100 or HbA1c>=5.7; else Healthy."
+    "cdc_rule_heuristic": {
+      "model": "CDC Epidemiological Risk Heuristic",
+      "accuracy": 0.7686,
+      "f1_macro": 0.4052,
+      "description": "Deterministic rule: Diabetic if High BP & Chol with BMI>=30 & Age>=60; Pre-diabetic if High BP & Chol with BMI>=27; else Healthy."
     }
   }
 }

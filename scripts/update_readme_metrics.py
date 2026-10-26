@@ -66,14 +66,15 @@ def update_readme():
     total_corr = h_corr + p_corr + d_corr
 
     baselines = metrics.get("baselines_comparison", {})
-    dummy_acc = format_percent(baselines.get("majority_class_dummy", {}).get("accuracy", 0.48))
-    dummy_f1 = format_float(baselines.get("majority_class_dummy", {}).get("f1_macro", 0.2162))
+    dummy_acc = format_percent(baselines.get("majority_class_dummy", {}).get("accuracy", 0.8412))
+    dummy_f1 = format_float(baselines.get("majority_class_dummy", {}).get("f1_macro", 0.3046))
 
-    lr_acc = format_percent(baselines.get("logistic_regression", {}).get("accuracy", 0.9688))
-    lr_f1 = format_float(baselines.get("logistic_regression", {}).get("f1_macro", 0.9658))
+    lr_acc = format_percent(baselines.get("logistic_regression", {}).get("accuracy", 0.6435))
+    lr_f1 = format_float(baselines.get("logistic_regression", {}).get("f1_macro", 0.4271))
 
-    ada_acc = format_percent(baselines.get("ada_rule_heuristic", {}).get("accuracy", 0.9325))
-    ada_f1 = format_float(baselines.get("ada_rule_heuristic", {}).get("f1_macro", 0.9239))
+    heuristic_info = baselines.get("cdc_rule_heuristic") or baselines.get("ada_rule_heuristic", {})
+    heuristic_acc = format_percent(heuristic_info.get("accuracy", 0.7686))
+    heuristic_f1 = format_float(heuristic_info.get("f1_macro", 0.4052))
 
     print(f"Loaded verified metrics: Accuracy = {accuracy_str}, F1 Macro = {f1_macro_str}")
     print(f"Total test samples: {total_test}, Correct: {total_corr} ({accuracy_str})")
@@ -94,10 +95,11 @@ def update_readme():
         "total_test": total_test, "total_corr": total_corr,
         "dummy_acc": dummy_acc, "dummy_f1": dummy_f1,
         "lr_acc": lr_acc, "lr_f1": lr_f1,
-        "ada_acc": ada_acc, "ada_f1": ada_f1,
+        "heuristic_acc": heuristic_acc, "heuristic_f1": heuristic_f1,
         "cm": cm
     }
 
 
 if __name__ == "__main__":
     update_readme()
+

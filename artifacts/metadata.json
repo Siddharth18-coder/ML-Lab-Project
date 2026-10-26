@@ -1,161 +1,62 @@
 {
-  "model_version": "1.1.0-educational",
-  "dataset_source": "synthetic_ada_benchmark",
-  "dataset_type": "synthetic",
-  "total_samples": 4000,
-  "train_samples": 3200,
-  "test_samples": 800,
-  "class_distribution": {
-    "Healthy": 1920,
-    "Pre-diabetic": 1120,
-    "Diabetic": 960
-  },
-  "split_strategy": "stratified_80_20",
-  "random_seed": 42,
-  "model_type": "rf",
+  "model_version": "2.0.0-brfss",
   "estimator": "RandomForestClassifier",
-  "numerical_features": [
-    "age",
+  "dataset_name": "CDC Behavioral Risk Factor Surveillance System (BRFSS) 2015",
+  "dataset_type": "real_cdc_brfss_2015",
+  "provenance": "Centers for Disease Control and Prevention (CDC), Public Domain",
+  "n_samples_total": 50000,
+  "n_features": 21,
+  "features": [
+    "high_bp",
+    "high_chol",
+    "chol_check",
+    "smoker",
+    "stroke",
+    "heart_disease_or_attack",
+    "phys_activity",
+    "fruits",
+    "veggies",
+    "hvy_alcohol_consump",
+    "any_healthcare",
+    "no_doc_bc_cost",
+    "diff_walk",
+    "sex",
     "bmi",
-    "fasting_blood_glucose",
-    "hba1c",
-    "total_cholesterol",
-    "hdl_cholesterol",
-    "ldl_cholesterol",
-    "triglycerides",
-    "systolic_bp",
-    "diastolic_bp",
-    "serum_creatinine",
-    "physical_activity_minutes_per_week",
-    "diet_quality_score",
-    "sleep_hours"
-  ],
-  "categorical_features": [
-    "gender",
-    "ethnicity",
-    "family_history_diabetes",
-    "smoking_status",
-    "alcohol_intake"
-  ],
-  "all_features": [
+    "gen_hlth",
+    "ment_hlth",
+    "phys_hlth",
     "age",
-    "bmi",
-    "fasting_blood_glucose",
-    "hba1c",
-    "total_cholesterol",
-    "hdl_cholesterol",
-    "ldl_cholesterol",
-    "triglycerides",
-    "systolic_bp",
-    "diastolic_bp",
-    "serum_creatinine",
-    "physical_activity_minutes_per_week",
-    "diet_quality_score",
-    "sleep_hours",
-    "gender",
-    "ethnicity",
-    "family_history_diabetes",
-    "smoking_status",
-    "alcohol_intake"
+    "education",
+    "income"
   ],
-  "encoded_feature_names": [
-    "age",
-    "bmi",
-    "fasting_blood_glucose",
-    "hba1c",
-    "total_cholesterol",
-    "hdl_cholesterol",
-    "ldl_cholesterol",
-    "triglycerides",
-    "systolic_bp",
-    "diastolic_bp",
-    "serum_creatinine",
-    "physical_activity_minutes_per_week",
-    "diet_quality_score",
-    "sleep_hours",
-    "gender_Female",
-    "gender_Male",
-    "gender_Other",
-    "ethnicity_African American",
-    "ethnicity_Asian",
-    "ethnicity_Caucasian",
-    "ethnicity_Hispanic",
-    "ethnicity_Other",
-    "family_history_diabetes_0",
-    "family_history_diabetes_1",
-    "smoking_status_Current",
-    "smoking_status_Former",
-    "smoking_status_Never",
-    "alcohol_intake_Heavy",
-    "alcohol_intake_Moderate",
-    "alcohol_intake_None"
-  ],
-  "class_mapping": {
-    "0": "Healthy",
-    "1": "Pre-diabetic",
-    "2": "Diabetic"
+  "feature_display_names": {
+    "high_bp": "High Blood Pressure",
+    "high_chol": "High Blood Cholesterol",
+    "chol_check": "Cholesterol Checked in Past 5 Years",
+    "bmi": "Body Mass Index (BMI)",
+    "smoker": "Smoking History (>=100 Cigarettes)",
+    "stroke": "History of Stroke",
+    "heart_disease_or_attack": "Coronary Heart Disease or Heart Attack",
+    "phys_activity": "Physical Activity in Past 30 Days",
+    "fruits": "Daily Fruit Consumption (>=1/day)",
+    "veggies": "Daily Vegetable Consumption (>=1/day)",
+    "hvy_alcohol_consump": "Heavy Alcohol Consumption",
+    "any_healthcare": "Healthcare Coverage",
+    "no_doc_bc_cost": "Cost Barrier to Medical Care",
+    "gen_hlth": "Self-Rated General Health",
+    "ment_hlth": "Days of Poor Mental Health (0-30)",
+    "phys_hlth": "Days of Poor Physical Health (0-30)",
+    "diff_walk": "Difficulty Walking or Climbing Stairs",
+    "sex": "Biological Sex",
+    "age": "Age Category (18-24 to 80+)",
+    "education": "Education Level",
+    "income": "Household Income Bracket"
   },
   "classes": [
     "Healthy",
     "Pre-diabetic",
     "Diabetic"
   ],
-  "physiological_bounds": {
-    "age": [
-      18.0,
-      100.0
-    ],
-    "bmi": [
-      12.0,
-      70.0
-    ],
-    "fasting_blood_glucose": [
-      40.0,
-      450.0
-    ],
-    "hba1c": [
-      3.5,
-      18.0
-    ],
-    "total_cholesterol": [
-      80.0,
-      450.0
-    ],
-    "hdl_cholesterol": [
-      15.0,
-      140.0
-    ],
-    "ldl_cholesterol": [
-      30.0,
-      320.0
-    ],
-    "triglycerides": [
-      30.0,
-      750.0
-    ],
-    "systolic_bp": [
-      60.0,
-      260.0
-    ],
-    "diastolic_bp": [
-      40.0,
-      160.0
-    ],
-    "serum_creatinine": [
-      0.2,
-      8.0
-    ],
-    "physical_activity_minutes_per_week": [
-      0.0,
-      1200.0
-    ],
-    "diet_quality_score": [
-      1.0,
-      10.0
-    ],
-    "sleep_hours": [
-      2.0,
-      16.0
-    ]
-  }
+  "cv_folds": 5,
+  "random_state": 42
 }

@@ -33,6 +33,33 @@ PHYSIOLOGICAL_BOUNDS: Dict[str, Tuple[float, float]] = {
     "sleep_hours": (2.0, 16.0),
 }
 
+# CDC BRFSS Health Indicators reference bounds
+BRFSS_FEATURE_BOUNDS: Dict[str, Tuple[float, float]] = {
+    "bmi": (12.0, 70.0),
+    "gen_hlth": (1.0, 5.0),
+    "ment_hlth": (0.0, 30.0),
+    "phys_hlth": (0.0, 30.0),
+    "age": (1.0, 13.0),
+    "education": (1.0, 6.0),
+    "income": (1.0, 8.0),
+    "high_bp": (0.0, 1.0),
+    "high_chol": (0.0, 1.0),
+    "chol_check": (0.0, 1.0),
+    "smoker": (0.0, 1.0),
+    "stroke": (0.0, 1.0),
+    "heart_disease_or_attack": (0.0, 1.0),
+    "phys_activity": (0.0, 1.0),
+    "fruits": (0.0, 1.0),
+    "veggies": (0.0, 1.0),
+    "hvy_alcohol_consump": (0.0, 1.0),
+    "any_healthcare": (0.0, 1.0),
+    "no_doc_bc_cost": (0.0, 1.0),
+    "diff_walk": (0.0, 1.0),
+    "sex": (0.0, 1.0),
+}
+
+UNIFIED_BOUNDS: Dict[str, Tuple[float, float]] = {**PHYSIOLOGICAL_BOUNDS, **BRFSS_FEATURE_BOUNDS}
+
 
 class PhysiologicalOutlierCapper(BaseEstimator, TransformerMixin):
     """
@@ -48,7 +75,7 @@ class PhysiologicalOutlierCapper(BaseEstimator, TransformerMixin):
         lower_percentile: float = 0.01,
         upper_percentile: float = 0.99
     ):
-        self.bounds = bounds or PHYSIOLOGICAL_BOUNDS
+        self.bounds = bounds or UNIFIED_BOUNDS
         self.use_empirical_bounds = use_empirical_bounds
         self.lower_percentile = lower_percentile
         self.upper_percentile = upper_percentile
