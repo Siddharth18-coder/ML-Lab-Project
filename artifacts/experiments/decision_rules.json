@@ -1,0 +1,119 @@
+{
+  "rule_argmax_default": {
+    "rule_name": "Default Maximum Probability (Argmax)",
+    "rule_specification": "Assigns class with largest uncalibrated/calibrated probability.",
+    "accuracy": 0.7054,
+    "balanced_accuracy": 0.5024,
+    "macro_f1": 0.4278,
+    "weighted_f1": 0.746,
+    "per_class_recall": {
+      "No Reported Diabetes": 0.7129,
+      "Pre-diabetic": 0.0415,
+      "Diabetic": 0.7529
+    },
+    "per_class_precision": {
+      "No Reported Diabetes": 0.9437,
+      "Pre-diabetic": 0.0271,
+      "Diabetic": 0.3093
+    },
+    "confusion_matrix": [
+      [
+        6016,
+        244,
+        2179
+      ],
+      [
+        64,
+        8,
+        121
+      ],
+      [
+        295,
+        43,
+        1030
+      ]
+    ],
+    "false_positives_for_prediabetic": 287,
+    "false_negatives_for_prediabetic": 185
+  },
+  "rule_validation_tuned_thresholds": {
+    "rule_name": "Validation-Tuned Thresholds (tau_diab=0.52, tau_prediab=0.35)",
+    "rule_specification": "If P(Diabetic) >= 0.52 -> Diabetic; Else if P(Pre-diabetic) >= 0.35 -> Pre-diabetic; Else -> No Reported Diabetes.",
+    "accuracy": 0.7736,
+    "balanced_accuracy": 0.4649,
+    "macro_f1": 0.4487,
+    "weighted_f1": 0.7962,
+    "per_class_recall": {
+      "No Reported Diabetes": 0.8346,
+      "Pre-diabetic": 0.0622,
+      "Diabetic": 0.4978
+    },
+    "per_class_precision": {
+      "No Reported Diabetes": 0.9105,
+      "Pre-diabetic": 0.0214,
+      "Diabetic": 0.3994
+    },
+    "confusion_matrix": [
+      [
+        7043,
+        451,
+        945
+      ],
+      [
+        102,
+        12,
+        79
+      ],
+      [
+        590,
+        97,
+        681
+      ]
+    ],
+    "false_positives_for_prediabetic": 548,
+    "false_negatives_for_prediabetic": 181
+  },
+  "rule_cost_sensitive_matrix": {
+    "rule_name": "Cost-Sensitive Minimum Expected Loss",
+    "rule_specification": "Assigns class minimizing expected risk under asymmetric loss matrix (penalizing missed metabolic cases).",
+    "accuracy": 0.4631,
+    "balanced_accuracy": 0.4759,
+    "macro_f1": 0.3523,
+    "weighted_f1": 0.5612,
+    "per_class_recall": {
+      "No Reported Diabetes": 0.4269,
+      "Pre-diabetic": 0.2902,
+      "Diabetic": 0.7105
+    },
+    "per_class_precision": {
+      "No Reported Diabetes": 0.9793,
+      "Pre-diabetic": 0.0177,
+      "Diabetic": 0.3072
+    },
+    "confusion_matrix": [
+      [
+        3603,
+        2762,
+        2074
+      ],
+      [
+        19,
+        56,
+        118
+      ],
+      [
+        57,
+        339,
+        972
+      ]
+    ],
+    "false_positives_for_prediabetic": 3101,
+    "false_negatives_for_prediabetic": 137
+  },
+  "threshold_selection_metadata": {
+    "validation_macro_f1_argmax": 0.4355,
+    "validation_macro_f1_tuned": 0.4519,
+    "selected_tau_prediabetic": 0.35,
+    "selected_tau_diabetic": 0.5166666666666666
+  }
+}

@@ -5,10 +5,9 @@ Data Provenance & Scientific Context:
 - Source: U.S. Centers for Disease Control and Prevention (CDC)
 - Survey: Behavioral Risk Factor Surveillance System (BRFSS) 2015 Annual Survey
 - Official CDC Survey Documentation: https://www.cdc.gov/brfss/annual_data/annual_2015.html
-- Scope: Cross-sectional telephone survey of non-institutionalized U.S. adults.
-- Sample Note: The complete-case cleaned dataset represents a convenience cohort of
-  survey respondents with complete answers across 21 specific health indicators;
-  it is not weighted for population-representative census estimates without sampling weights.
+- Scope: Cross-sectional telephone health surveillance of non-institutionalized U.S. adults.
+- Sample Note: Represents a complete-case analytical cohort of respondents with complete
+  answers across 21 indicators. It is not weighted for census estimates without BRFSS sampling weights.
 
 Target Variable Definition (DIABETE3):
 - 0 = No Reported Diabetes (No diabetes, DIABETE3 == 3.0)
@@ -17,24 +16,30 @@ Target Variable Definition (DIABETE3):
 - Excluded: Gestational diabetes (2.0), Don't know / Not sure (7.0), Refused (9.0), Missing (NaN).
 
 21 Standardized Features:
-- Binary: high_bp, high_chol, chol_check, smoker, stroke, heart_disease_or_attack,
+- Binary (0/1): high_bp, high_chol, chol_check, smoker, stroke, heart_disease_or_attack,
   phys_activity, fruits, veggies, hvy_alcohol_consump, any_healthcare, no_doc_bc_cost,
   diff_walk, sex
-- Numerical / Ordinal: bmi, gen_hlth, ment_hlth, phys_hlth, age, education, income
+- Discrete Ordinal / Count: gen_hlth (1-5), age (1-13), education (1-6), income (1-8),
+  ment_hlth (0-30), phys_hlth (0-30)
+- Continuous: bmi (12.0 - 70.0 kg/m²)
 """
 
 import os
 import hashlib
 import logging
 from pathlib import Path
-from typing import Tuple, Dict, Any, Optional
+from typing import Tuple, Dict, Any, Optional, Union
 import pandas as pd
 import numpy as np
 
 from clinical_transformers import (
     RAW_INPUT_FEATURES,
     BRFSS_FEATURE_BOUNDS,
-    CLASS_DEFINITIONS
+    DISCRETE_ALLOWED_VALUES,
+    INTEGER_RANGE_FEATURES,
+    CONTINUOUS_FLOAT_FEATURES,
+    CLASS_DEFINITIONS,
+    validate_survey_feature_values
 )
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] - %(message)s")
@@ -62,11 +67,14 @@ def compute_file_sha256(filepath: str, chunk_size: int = 65536) -> str:
     return sha256.hexdigest()
 
 
-def validate_cleaned_dataframe(df: pd.DataFrame) -> Dict[str, Any]:
+def validate_cleaned_dataframe(df: pd.DataFrame, min_class_samples: int = 0) -> Dict[str, Any]:
     """
     Strict validation of cleaned cohort format.
-    Checks required columns, allowed values, target labels, missingness, and feature types.
+    Checks required columns, discrete allowed values, target labels, missingness, and feature types.
     """
+    if len(df) == 0:
+        raise ValueError("Cleaned dataset validation failed: Dataset is empty (0 rows).")
+
     expected_cols = [TARGET_COL] + RAW_INPUT_FEATURES
     missing_cols = [c for c in expected_cols if c not in df.columns]
     if missing_cols:
@@ -90,19 +98,22 @@ def validate_cleaned_dataframe(df: pd.DataFrame) -> Dict[str, Any]:
             f"Allowed values are 0 (No Reported Diabetes), 1 (Pre-diabetic), 2 (Diabetic)."
         )
 
-    # 3. Feature range validation
-    range_violations = {}
-    for feat in RAW_INPUT_FEATURES:
-        low, high = BRFSS_FEATURE_BOUNDS[feat]
-        min_val = float(df[feat].min())
-        max_val = float(df[feat].max())
-        if min_val < low or max_val > high:
-            range_violations[feat] = {"min": min_val, "max": max_val, "expected": (low, high)}
-
-    if range_violations:
-        raise ValueError(f"Cleaned dataset features violate expected reference bounds: {range_violations}")
-
     class_counts = df[TARGET_COL].value_counts().to_dict()
+    if min_class_samples > 0:
+        for target_val in [0, 1, 2]:
+            cnt = class_counts.get(target_val, 0)
+            if cnt < min_class_samples:
+                raise ValueError(
+                    f"Insufficient sample count for class {target_val} ({CLASS_DEFINITIONS.get(target_val, 'Unknown')}): "
+                    f"only {cnt} examples found. Minimum required is {min_class_samples}."
+                )
+
+    # 3. Discrete & bounded feature value validation
+    try:
+        validate_survey_feature_values(df[RAW_INPUT_FEATURES])
+    except ValueError as e:
+        raise ValueError(f"Cleaned dataset features violate expected reference bounds or discrete survey domains: {e}") from e
+
     class_dist = {CLASS_DEFINITIONS[int(k)]: int(v) for k, v in class_counts.items()}
 
     return {
@@ -237,13 +248,19 @@ def clean_raw_brfss_dataframe(raw_df: pd.DataFrame) -> Tuple[pd.DataFrame, Dict[
 def load_dataset(
     data_path: str,
     is_raw: Optional[bool] = None,
-    sample_size: Optional[int] = None,
+    sample_size: Optional[Union[int, str]] = None,
     random_state: int = 42
 ) -> Tuple[pd.DataFrame, Dict[str, Any]]:
     """
     Unified dataset loader supporting both:
-    Path A: Bundled cleaned cohort (e.g. artifacts/cdc_brfss_diabetes_clean.csv)
-    Path B: Raw CDC BRFSS dataset (e.g. archive/2015.csv)
+    Path A: Bundled cleaned cohort (artifacts/cdc_brfss_diabetes_clean.csv)
+    Path B: Raw CDC BRFSS dataset (archive/2015.csv)
+
+    Parameters:
+    -----------
+    sample_size: int, "all", or None.
+                 If "all" or None, returns all post-cleaning eligible records.
+                 If an int (e.g. 50000), extracts a reproducible stratified subsample.
     """
     resolved_path = Path(data_path)
     if not resolved_path.is_absolute():
@@ -253,25 +270,24 @@ def load_dataset(
         raise FileNotFoundError(
             f"Dataset not found at '{resolved_path}'. "
             f"If training from the bundled clean cohort, use 'artifacts/cdc_brfss_diabetes_clean.csv'. "
-            f"If training from raw CDC survey data, place '2015.csv' in archive/ and specify --is-raw."
+            f"If training from raw CDC survey data, place '2015.csv' in archive/ and specify is_raw=True."
         )
 
     file_hash = compute_file_sha256(str(resolved_path))
 
-    # Peek headers to auto-detect format if not explicitly specified
     sample_header = pd.read_csv(resolved_path, nrows=2)
     has_raw_target = "DIABETE3" in sample_header.columns
     has_clean_target = TARGET_COL in sample_header.columns
 
     if is_raw is True and not has_raw_target:
         raise ValueError(
-            f"Dataset '{resolved_path}' was specified as raw (--is-raw), but does not contain "
+            f"Dataset '{resolved_path}' was specified as raw (--data-mode raw), but does not contain "
             f"the raw CDC 'DIABETE3' column. Did you pass a cleaned dataset by mistake?"
         )
     if is_raw is False and not has_clean_target:
         raise ValueError(
             f"Dataset '{resolved_path}' was specified as cleaned, but does not contain "
-            f"the required '{TARGET_COL}' column. Did you pass a raw CDC file without --is-raw?"
+            f"the required '{TARGET_COL}' column. Did you pass a raw CDC file without --data-mode raw?"
         )
 
     detected_as_raw = is_raw if is_raw is not None else has_raw_target
@@ -288,29 +304,48 @@ def load_dataset(
         raw_df = pd.read_csv(resolved_path, usecols=BRFSS_RAW_COLS)
         df_clean, telemetry = clean_raw_brfss_dataframe(raw_df)
         metadata["telemetry"] = telemetry
+        metadata["raw_records_count"] = telemetry["raw_records"]
+        metadata["post_cleaning_eligible_count"] = len(df_clean)
+        metadata["is_upstream_subsampled"] = False
     else:
         logger.info("Reading pre-cleaned BRFSS cohort: %s", resolved_path)
         df_clean = pd.read_csv(resolved_path)
         val_info = validate_cleaned_dataframe(df_clean)
         metadata["validation"] = val_info
+        metadata["raw_records_count"] = None
+        metadata["post_cleaning_eligible_count"] = len(df_clean)
+        # Note: cdc_brfss_diabetes_clean.csv is an upstream subsample of 50k
+        metadata["is_upstream_subsampled"] = (resolved_path.name == "cdc_brfss_diabetes_clean.csv")
 
-    if sample_size and sample_size < len(df_clean):
-        logger.info("Extracting stratified subsample of %d records (seed=%d)...", sample_size, random_state)
+    metadata["eligible_class_distribution"] = {
+        CLASS_DEFINITIONS[int(k)]: int(v)
+        for k, v in df_clean[TARGET_COL].value_counts().items()
+    }
+
+    # Handle sample size
+    target_sample_size: Optional[int] = None
+    if sample_size is not None and str(sample_size).lower() != "all":
+        try:
+            target_sample_size = int(sample_size)
+        except ValueError:
+            raise ValueError(f"Invalid sample_size '{sample_size}'. Must be an integer or 'all'.")
+
+    if target_sample_size and target_sample_size < len(df_clean):
+        logger.info("Extracting stratified subsample of %d records (seed=%d)...", target_sample_size, random_state)
         from sklearn.model_selection import train_test_split
         df_clean, _ = train_test_split(
             df_clean,
-            train_size=sample_size,
+            train_size=target_sample_size,
             stratify=df_clean[TARGET_COL],
             random_state=random_state
         )
-        metadata["subsampled"] = True
-        metadata["sample_size"] = sample_size
+        metadata["subsampled_in_current_run"] = True
+        metadata["selected_cohort_count"] = target_sample_size
     else:
-        metadata["subsampled"] = False
-        metadata["sample_size"] = len(df_clean)
+        metadata["subsampled_in_current_run"] = False
+        metadata["selected_cohort_count"] = len(df_clean)
 
     df_clean = df_clean.reset_index(drop=True)
-    metadata["final_record_count"] = len(df_clean)
     metadata["class_distribution"] = {
         CLASS_DEFINITIONS[int(k)]: int(v)
         for k, v in df_clean[TARGET_COL].value_counts().items()
@@ -322,22 +357,33 @@ def load_dataset(
 if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser(description="Ingest and clean CDC BRFSS survey dataset.")
+    parser.add_argument("--data-mode", choices=["raw", "cleaned"], default="raw", help="Input dataset type.")
     parser.add_argument("--raw-path", type=str, default="archive/2015.csv", help="Path to raw CDC CSV.")
-    parser.add_argument("--out-path", type=str, default="artifacts/cdc_brfss_diabetes_clean.csv", help="Output clean CSV path.")
-    parser.add_argument("--sample-size", type=int, default=50000, help="Stratified sample size to save.")
-    parser.add_argument("--seed", type=int, default=42, help="Random seed.")
+    parser.add_argument("--clean-path", type=str, default="artifacts/cdc_brfss_diabetes_clean.csv", help="Path to pre-cleaned CSV.")
+    parser.add_argument("--out-path", type=str, default="artifacts/cdc_brfss_diabetes_clean_full.csv", help="Output path when cleaning full data.")
+    parser.add_argument("--samples", type=str, default="all", help="Number of records to extract ('all' or integer e.g. 50000).")
+    parser.add_argument("--seed", type=int, default=42, help="Random seed for subsampling.")
+    parser.add_argument("--validate-only", action="store_true", help="Validate clean dataset format without re-ingesting.")
     args = parser.parse_args()
 
-    clean_df, meta = load_dataset(
-        data_path=args.raw_path,
-        is_raw=True,
-        sample_size=args.sample_size,
-        random_state=args.seed
-    )
+    if args.validate_only:
+        p = PROJECT_ROOT / args.clean_path
+        print(f"Validating {p}...")
+        df = pd.read_csv(p)
+        info = validate_cleaned_dataframe(df)
+        print("Validation succeeded:", info)
+    else:
+        in_path = args.raw_path if args.data_mode == "raw" else args.clean_path
+        clean_df, meta = load_dataset(
+            data_path=in_path,
+            is_raw=(args.data_mode == "raw"),
+            sample_size=args.samples,
+            random_state=args.seed
+        )
 
-    out_file = PROJECT_ROOT / args.out_path
-    out_file.parent.mkdir(parents=True, exist_ok=True)
-    clean_df.to_csv(out_file, index=False)
-    print(f"Saved {len(clean_df)} validated records to {out_file}")
-    print(f"Dataset SHA-256: {compute_file_sha256(str(out_file))}")
-    print(f"Class breakdown: {meta['class_distribution']}")
+        out_file = PROJECT_ROOT / args.out_path
+        out_file.parent.mkdir(parents=True, exist_ok=True)
+        clean_df.to_csv(out_file, index=False)
+        print(f"Saved {len(clean_df)} validated records to {out_file}")
+        print(f"Dataset SHA-256: {compute_file_sha256(str(out_file))}")
+        print(f"Metadata summary: {meta}")

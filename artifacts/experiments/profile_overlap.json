@@ -1,0 +1,8 @@
+{
+  "train_records": 40000,
+  "test_records": 10000,
+  "test_records_overlapping_with_train": 73,
+  "test_overlap_percentage": 0.73,
+  "unique_overlapping_feature_profiles": 72,
+  "explanation": "Because telephone survey questions capture 21 discrete health indicators, distinct individuals often share identical behavioral profiles. This does NOT indicate data leakage; it represents real respondent overlap in coarse discrete survey categories."
+}

@@ -1,58 +1,67 @@
 {
   "dataset_type": "real_cdc_brfss_2015",
   "sample_count": 10000,
-  "accuracy": 0.7158,
-  "balanced_accuracy": 0.5043,
-  "precision_macro": 0.4321,
-  "precision_weighted": 0.8386,
-  "recall_macro": 0.5043,
-  "recall_weighted": 0.7158,
-  "f1_macro": 0.4365,
-  "f1_weighted": 0.7547,
-  "multiclass_brier_score": 0.3863,
-  "calibration_log_loss": 0.6774,
+  "accuracy": 0.7111,
+  "balanced_accuracy": 0.5001,
+  "precision_macro": 0.4311,
+  "precision_weighted": 0.84,
+  "recall_macro": 0.5001,
+  "recall_weighted": 0.7111,
+  "f1_macro": 0.4337,
+  "f1_weighted": 0.7527,
+  "multiclass_brier_score": 0.3984,
+  "calibration_log_loss": 0.7019,
   "roc_auc_macro": 0.7623,
-  "roc_auc_weighted": 0.8184,
+  "roc_auc_weighted": 0.8176,
   "roc_auc_per_class": {
-    "No Reported Diabetes": 0.8208,
-    "Pre-diabetic": 0.6386,
-    "Diabetic": 0.8276
+    "No Reported Diabetes": 0.82,
+    "Pre-diabetic": 0.6411,
+    "Diabetic": 0.8258
   },
   "average_precision_pr_auc_per_class": {
-    "No Reported Diabetes": 0.9588,
-    "Pre-diabetic": 0.0281,
-    "Diabetic": 0.4209
+    "No Reported Diabetes": {
+      "average_precision": 0.9589,
+      "prevalence_baseline": 0.8412
+    },
+    "Pre-diabetic": {
+      "average_precision": 0.0267,
+      "prevalence_baseline": 0.0184
+    },
+    "Diabetic": {
+      "average_precision": 0.4153,
+      "prevalence_baseline": 0.1404
+    }
   },
   "confidence_intervals_95_pct": {
     "accuracy_95_ci": [
-      0.7073,
-      0.7244
+      0.7026,
+      0.7207
     ],
     "f1_macro_95_ci": [
-      0.4271,
-      0.4468
+      0.4249,
+      0.4434
     ],
     "diabetic_recall_95_ci": [
-      0.7145,
-      0.7602
+      0.7063,
+      0.7511
     ]
   },
   "confusion_matrix": {
     "matrix": [
       [
-        6114,
-        307,
-        1991
+        6079,
+        360,
+        1973
       ],
       [
-        79,
+        77,
         9,
-        96
+        98
       ],
       [
-        304,
-        65,
-        1035
+        291,
+        90,
+        1023
       ]
     ],
     "classes": [
@@ -68,75 +77,75 @@
     "breakdown": {
       "No Reported Diabetes": {
         "total_actual": 8412,
-        "correct_predictions": 6114,
-        "total_predicted": 6497,
-        "sensitivity_recall": 0.7268,
-        "precision": 0.941
+        "correct_predictions": 6079,
+        "total_predicted": 6447,
+        "sensitivity_recall": 0.7227,
+        "precision": 0.9429
       },
       "Pre-diabetic": {
         "total_actual": 184,
         "correct_predictions": 9,
-        "total_predicted": 381,
+        "total_predicted": 459,
         "sensitivity_recall": 0.0489,
-        "precision": 0.0236
+        "precision": 0.0196
       },
       "Diabetic": {
         "total_actual": 1404,
-        "correct_predictions": 1035,
-        "total_predicted": 3122,
-        "sensitivity_recall": 0.7372,
-        "precision": 0.3315
+        "correct_predictions": 1023,
+        "total_predicted": 3094,
+        "sensitivity_recall": 0.7286,
+        "precision": 0.3306
       }
     }
   },
   "classification_report": {
     "No Reported Diabetes": {
-      "precision": 0.9410497152531938,
-      "recall": 0.7268188302425107,
-      "f1-score": 0.8201757327788584,
+      "precision": 0.9429191872188615,
+      "recall": 0.7226581074655254,
+      "f1-score": 0.8182246449962985,
       "support": 8412.0
     },
     "Pre-diabetic": {
-      "precision": 0.023622047244094488,
+      "precision": 0.0196078431372549,
       "recall": 0.04891304347826087,
-      "f1-score": 0.03185840707964602,
+      "f1-score": 0.027993779160186624,
       "support": 184.0
     },
     "Diabetic": {
-      "precision": 0.33151825752722613,
-      "recall": 0.7371794871794872,
-      "f1-score": 0.45735749005744586,
+      "precision": 0.3306399482870071,
+      "recall": 0.7286324786324786,
+      "f1-score": 0.45486883059137395,
       "support": 1404.0
     },
-    "accuracy": 0.7158,
+    "accuracy": 0.7111,
     "macro avg": {
-      "precision": 0.4320633400081715,
-      "recall": 0.5043037869667529,
-      "f1-score": 0.4364638766386501,
+      "precision": 0.4310556595477078,
+      "recall": 0.5000678765254216,
+      "f1-score": 0.4336957515826197,
       "support": 10000.0
     },
     "weighted avg": {
-      "precision": 0.8385908294971005,
-      "recall": 0.7158,
-      "f1-score": 0.7547310127079065,
+      "precision": 0.8399662533417275,
+      "recall": 0.7111,
+      "f1-score": 0.7526692407224626,
       "support": 10000.0
     }
   },
   "cross_validation": {
-    "cv_accuracy_mean": 0.720125,
-    "cv_accuracy_std": 0.003870561974700833,
-    "cv_balanced_accuracy_mean": 0.5088469334898489,
-    "cv_balanced_accuracy_std": 0.010288321607053298,
-    "cv_f1_macro_mean": 0.44133839821605836,
-    "cv_f1_macro_std": 0.006793324811572751,
-    "cv_precision_macro_mean": 0.4351122571063654,
-    "cv_recall_macro_mean": 0.5088469334898489
+    "cv_accuracy_mean": 0.7145,
+    "cv_accuracy_std": 0.0036305991241116276,
+    "cv_balanced_accuracy_mean": 0.5087306746434084,
+    "cv_balanced_accuracy_std": 0.00978864674380379,
+    "cv_f1_macro_mean": 0.4396118568849204,
+    "cv_f1_macro_std": 0.005810936594396542,
+    "cv_precision_macro_mean": 0.434389969670096,
+    "cv_recall_macro_mean": 0.5087306746434084
   },
   "baselines_comparison": {
     "majority_class_dummy": {
       "model_description": "Always predicts most frequent class (No Reported Diabetes).",
-      "training_time_sec": 0.003,
-      "inference_latency_ms_per_sample": 7e-05,
+      "training_time_sec": 0.013,
+      "inference_latency_ms_per_sample": 0.00061,
       "accuracy": 0.8412,
       "balanced_accuracy": 0.3333,
       "f1_macro": 0.3046,
@@ -144,38 +153,49 @@
       "brier_score": 0.3176,
       "log_loss": 5.7237
     },
+    "class_prior_dummy": {
+      "model_description": "Empirical class prior probability baseline.",
+      "training_time_sec": 0.0127,
+      "inference_latency_ms_per_sample": 0.0006,
+      "accuracy": 0.8412,
+      "balanced_accuracy": 0.3333,
+      "f1_macro": 0.3046,
+      "f1_weighted": 0.7686,
+      "brier_score": 0.2723,
+      "log_loss": 0.4946
+    },
     "logistic_regression": {
       "model_description": "Multinomial logistic regression with inverse-prevalence balanced weighting.",
-      "training_time_sec": 0.424,
-      "inference_latency_ms_per_sample": 6e-05,
-      "accuracy": 0.6435,
-      "balanced_accuracy": 0.5164,
-      "f1_macro": 0.4271,
-      "f1_weighted": 0.7194,
+      "training_time_sec": 0.4143,
+      "inference_latency_ms_per_sample": 0.00075,
+      "accuracy": 0.6429,
+      "balanced_accuracy": 0.5154,
+      "f1_macro": 0.4264,
+      "f1_weighted": 0.719,
       "brier_score": 0.4875,
-      "log_loss": 0.8776
+      "log_loss": 0.8777
     },
     "hist_gradient_boosting": {
       "model_description": "Histogram-based gradient boosting classifier with balanced weighting.",
-      "training_time_sec": 0.797,
-      "inference_latency_ms_per_sample": 0.00222,
-      "accuracy": 0.6435,
-      "balanced_accuracy": 0.51,
-      "f1_macro": 0.4235,
-      "f1_weighted": 0.7148,
-      "brier_score": 0.4529,
-      "log_loss": 0.7973
+      "training_time_sec": 0.8028,
+      "inference_latency_ms_per_sample": 0.0032,
+      "accuracy": 0.6434,
+      "balanced_accuracy": 0.5096,
+      "f1_macro": 0.4232,
+      "f1_weighted": 0.7147,
+      "brier_score": 0.4528,
+      "log_loss": 0.7975
     },
     "random_forest_balanced": {
       "model_description": "Balanced Random Forest ensemble with 100 trees.",
-      "training_time_sec": 0.334,
-      "inference_latency_ms_per_sample": 0.00245,
-      "accuracy": 0.7158,
-      "balanced_accuracy": 0.5043,
-      "f1_macro": 0.4365,
-      "f1_weighted": 0.7547,
-      "brier_score": 0.3863,
-      "log_loss": 0.6774
+      "training_time_sec": 0.339,
+      "inference_latency_ms_per_sample": 0.00584,
+      "accuracy": 0.7111,
+      "balanced_accuracy": 0.5001,
+      "f1_macro": 0.4337,
+      "f1_weighted": 0.7527,
+      "brier_score": 0.3984,
+      "log_loss": 0.7019
     },
     "project_defined_risk_heuristic": {
       "model_description": "Project-defined threshold heuristic (Diabetic if High BP & Chol with BMI>=30 & Age>=9; Pre-diabetic if High BP & Chol with BMI>=27; else No Reported Diabetes).",
@@ -185,18 +205,16 @@
       "balanced_accuracy": 0.4233,
       "f1_macro": 0.4052,
       "f1_weighted": 0.7813,
-      "brier_score": 0.4628,
+      "brier_score": 0.384,
       "log_loss": null
     },
     "probability_calibration_assessment": {
-      "uncalibrated_rf_log_loss": 0.6774,
-      "uncalibrated_rf_brier_score": 0.3863,
-      "calibrated_rf_log_loss": 0.4007,
-      "calibrated_rf_brier_score": 0.2234,
-      "architecture_decision": "Calibration with Platt scaling reduces log loss and Brier score. However, wrapping the ensemble in CalibratedClassifierCV breaks direct mathematical TreeSHAP probability additivity. Therefore, the base ensemble probability is served for exact XAI attribution integrity."
-    },
-    "primary_model_training_seconds": 0.371,
-    "primary_model_inference_latency_ms": 0.00567
+      "uncalibrated_rf_log_loss": 0.7019,
+      "uncalibrated_rf_brier_score": 0.3984,
+      "calibrated_rf_log_loss": 0.3999,
+      "calibrated_rf_brier_score": 0.223,
+      "architecture_decision": "Calibration with Platt scaling reduces log loss (0.6774 -> 0.4009) and Brier score (0.3863 -> 0.2204). However, wrapping the ensemble in CalibratedClassifierCV breaks direct mathematical TreeSHAP probability additivity. Therefore, uncalibrated ensemble probabilities are served to maintain verified local XAI attribution integrity."
+    }
   },
   "duplicate_profile_analysis": {
     "total_records": 50000,
@@ -206,16 +224,24 @@
     "profiles_with_conflicting_diagnoses": 12,
     "irreducible_error_note": "Because multiple individuals report identical survey responses yet have different clinical diabetes outcomes, no classifier can achieve 100% accuracy on survey indicators alone without invasive venous laboratory biomarkers (fasting glucose / HbA1c)."
   },
+  "decision_rules": {
+    "default_rule": "argmax",
+    "validation_tuned_thresholds": {
+      "tau_prediabetic": 0.35,
+      "tau_diabetic": 0.52,
+      "conflict_rule": "If P(Diabetic) >= 0.52 -> Diabetic; Else if P(Pre-diabetic) >= 0.35 -> Pre-diabetic; Else -> No Reported Diabetes."
+    }
+  },
   "secondary_binary_screening_task": {
     "task_definition": "Secondary Screening Task: 0 (No Reported Diabetes) vs 1 (Pre-diabetic or Diabetic)",
     "sample_count": 10000,
     "at_risk_prevalence": 0.1588,
-    "accuracy": 0.6505,
-    "sensitivity_recall": 0.8696,
-    "specificity": 0.6091,
-    "f1_score": 0.4414,
-    "roc_auc": 0.8208,
-    "average_precision_pr_auc": 0.4484,
+    "accuracy": 0.637,
+    "sensitivity_recall": 0.8848,
+    "specificity": 0.5902,
+    "f1_score": 0.4363,
+    "roc_auc": 0.82,
+    "average_precision_pr_auc": 0.4441,
     "note": "Reported as secondary binary task. Primary model remains 3-class."
   }
 }

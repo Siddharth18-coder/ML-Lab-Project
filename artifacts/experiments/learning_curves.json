@@ -1,0 +1,228 @@
+{
+  "total_eligible_records": 251117,
+  "test_partition_size": 50224,
+  "subsets_evaluated": [
+    {
+      "training_samples": 10000,
+      "prediabetic_training_count": 184,
+      "training_time_seconds": 0.18,
+      "test_accuracy": 0.7287,
+      "test_balanced_accuracy": 0.4985,
+      "test_macro_f1": 0.4349,
+      "per_class_recall": {
+        "No Reported Diabetes": 0.7447,
+        "Pre-diabetic": 0.026,
+        "Diabetic": 0.7248
+      },
+      "per_class_precision": {
+        "No Reported Diabetes": 0.9369,
+        "Pre-diabetic": 0.0258,
+        "Diabetic": 0.3253
+      },
+      "per_class_f1": {
+        "No Reported Diabetes": 0.8298,
+        "Pre-diabetic": 0.0259,
+        "Diabetic": 0.4491
+      },
+      "per_class_average_precision": {
+        "No Reported Diabetes": {
+          "average_precision": 0.9558,
+          "class_prevalence_baseline": 0.8412
+        },
+        "Pre-diabetic": {
+          "average_precision": 0.0237,
+          "class_prevalence_baseline": 0.0184
+        },
+        "Diabetic": {
+          "average_precision": 0.3913,
+          "class_prevalence_baseline": 0.1404
+        }
+      }
+    },
+    {
+      "training_samples": 25000,
+      "prediabetic_training_count": 460,
+      "training_time_seconds": 0.27,
+      "test_accuracy": 0.719,
+      "test_balanced_accuracy": 0.5033,
+      "test_macro_f1": 0.436,
+      "per_class_recall": {
+        "No Reported Diabetes": 0.7312,
+        "Pre-diabetic": 0.0444,
+        "Diabetic": 0.7342
+      },
+      "per_class_precision": {
+        "No Reported Diabetes": 0.9399,
+        "Pre-diabetic": 0.0287,
+        "Diabetic": 0.3251
+      },
+      "per_class_f1": {
+        "No Reported Diabetes": 0.8225,
+        "Pre-diabetic": 0.0348,
+        "Diabetic": 0.4507
+      },
+      "per_class_average_precision": {
+        "No Reported Diabetes": {
+          "average_precision": 0.958,
+          "class_prevalence_baseline": 0.8412
+        },
+        "Pre-diabetic": {
+          "average_precision": 0.0248,
+          "class_prevalence_baseline": 0.0184
+        },
+        "Diabetic": {
+          "average_precision": 0.4069,
+          "class_prevalence_baseline": 0.1404
+        }
+      }
+    },
+    {
+      "training_samples": 50000,
+      "prediabetic_training_count": 920,
+      "training_time_seconds": 0.44,
+      "test_accuracy": 0.7126,
+      "test_balanced_accuracy": 0.5025,
+      "test_macro_f1": 0.4333,
+      "per_class_recall": {
+        "No Reported Diabetes": 0.7227,
+        "Pre-diabetic": 0.0455,
+        "Diabetic": 0.7394
+      },
+      "per_class_precision": {
+        "No Reported Diabetes": 0.9425,
+        "Pre-diabetic": 0.0252,
+        "Diabetic": 0.3227
+      },
+      "per_class_f1": {
+        "No Reported Diabetes": 0.8181,
+        "Pre-diabetic": 0.0324,
+        "Diabetic": 0.4493
+      },
+      "per_class_average_precision": {
+        "No Reported Diabetes": {
+          "average_precision": 0.9586,
+          "class_prevalence_baseline": 0.8412
+        },
+        "Pre-diabetic": {
+          "average_precision": 0.0258,
+          "class_prevalence_baseline": 0.0184
+        },
+        "Diabetic": {
+          "average_precision": 0.4103,
+          "class_prevalence_baseline": 0.1404
+        }
+      }
+    },
+    {
+      "training_samples": 100000,
+      "prediabetic_training_count": 1839,
+      "training_time_seconds": 0.85,
+      "test_accuracy": 0.6984,
+      "test_balanced_accuracy": 0.508,
+      "test_macro_f1": 0.4335,
+      "per_class_recall": {
+        "No Reported Diabetes": 0.7059,
+        "Pre-diabetic": 0.0844,
+        "Diabetic": 0.7336
+      },
+      "per_class_precision": {
+        "No Reported Diabetes": 0.9453,
+        "Pre-diabetic": 0.0291,
+        "Diabetic": 0.3235
+      },
+      "per_class_f1": {
+        "No Reported Diabetes": 0.8083,
+        "Pre-diabetic": 0.0433,
+        "Diabetic": 0.449
+      },
+      "per_class_average_precision": {
+        "No Reported Diabetes": {
+          "average_precision": 0.9593,
+          "class_prevalence_baseline": 0.8412
+        },
+        "Pre-diabetic": {
+          "average_precision": 0.0273,
+          "class_prevalence_baseline": 0.0184
+        },
+        "Diabetic": {
+          "average_precision": 0.4149,
+          "class_prevalence_baseline": 0.1404
+        }
+      }
+    },
+    {
+      "training_samples": 200000,
+      "prediabetic_training_count": 3678,
+      "training_time_seconds": 2.08,
+      "test_accuracy": 0.6939,
+      "test_balanced_accuracy": 0.5086,
+      "test_macro_f1": 0.4335,
+      "per_class_recall": {
+        "No Reported Diabetes": 0.7027,
+        "Pre-diabetic": 0.105,
+        "Diabetic": 0.718
+      },
+      "per_class_precision": {
+        "No Reported Diabetes": 0.9462,
+        "Pre-diabetic": 0.0293,
+        "Diabetic": 0.3259
+      },
+      "per_class_f1": {
+        "No Reported Diabetes": 0.8065,
+        "Pre-diabetic": 0.0459,
+        "Diabetic": 0.4483
+      },
+      "per_class_average_precision": {
+        "No Reported Diabetes": {
+          "average_precision": 0.9598,
+          "class_prevalence_baseline": 0.8412
+        },
+        "Pre-diabetic": {
+          "average_precision": 0.0283,
+          "class_prevalence_baseline": 0.0184
+        },
+        "Diabetic": {
+          "average_precision": 0.4158,
+          "class_prevalence_baseline": 0.1404
+        }
+      }
+    },
+    {
+      "training_samples": 200893,
+      "prediabetic_training_count": 3695,
+      "training_time_seconds": 1.97,
+      "test_accuracy": 0.6943,
+      "test_balanced_accuracy": 0.511,
+      "test_macro_f1": 0.4347,
+      "per_class_recall": {
+        "No Reported Diabetes": 0.7021,
+        "Pre-diabetic": 0.1061,
+        "Diabetic": 0.7248
+      },
+      "per_class_precision": {
+        "No Reported Diabetes": 0.9466,
+        "Pre-diabetic": 0.0299,
+        "Diabetic": 0.3275
+      },
+      "per_class_f1": {
+        "No Reported Diabetes": 0.8062,
+        "Pre-diabetic": 0.0467,
+        "Diabetic": 0.4511
+      },
+      "per_class_average_precision": {
+        "No Reported Diabetes": {
+          "average_precision": 0.96,
+          "class_prevalence_baseline": 0.8412
+        },
+        "Pre-diabetic": {
+          "average_precision": 0.0284,
+          "class_prevalence_baseline": 0.0184
+        },
+        "Diabetic": {
+          "average_precision": 0.4181,
+          "class_prevalence_baseline": 0.1404
+        }
+      }
+    }
+  ]
+}

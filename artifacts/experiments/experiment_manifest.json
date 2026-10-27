@@ -1,0 +1,48 @@
+{
+  "manifest_version": "1.0.0",
+  "timestamp": "2026-10-27T04:43:10Z",
+  "source_data": {
+    "source_path": "/Users/siddharthbhargava/Documents/ML-Lab Project/archive/2015.csv",
+    "source_filename": "2015.csv",
+    "sha256_checksum": "a7d3380aca5aeae94186770983c3089fb6c4b2074aa112418112c11891d16420",
+    "is_raw_source": true,
+    "telemetry": {
+      "raw_records": 441456,
+      "filtering_stages": {
+        "target_validity_diabete3": 4406,
+        "high_bp": 1255,
+        "high_chol": 61263,
+        "chol_check": 5402,
+        "bmi_valid_range": 29152,
+        "remaining_lifestyle_demographic_filters": 88861
+      },
+      "final_clean_records": 251117,
+      "total_excluded_records": 190339
+    },
+    "raw_records_count": 441456,
+    "post_cleaning_eligible_count": 251117,
+    "is_upstream_subsampled": false,
+    "eligible_class_distribution": {
+      "No Reported Diabetes": 211231,
+      "Diabetic": 35267,
+      "Pre-diabetic": 4619
+    },
+    "subsampled_in_current_run": false,
+    "selected_cohort_count": 251117,
+    "class_distribution": {
+      "No Reported Diabetes": 211231,
+      "Diabetic": 35267,
+      "Pre-diabetic": 4619
+    }
+  },
+  "experiments": {
+    "preprocessing_ablation": "artifacts/experiments/preprocessing_ablation.json",
+    "learning_curves": "artifacts/experiments/learning_curves.json",
+    "model_search": "artifacts/experiments/model_search.json",
+    "decision_rules": "artifacts/experiments/decision_rules.json",
+    "calibration_assessment": "artifacts/experiments/calibration_assessment.json",
+    "profile_overlap": "artifacts/experiments/profile_overlap.json",
+    "runtime_benchmarks": "artifacts/experiments/runtime_benchmarks.json",
+    "baseline_manifest": "artifacts/experiments/baseline_manifest.json"
+  }
+}

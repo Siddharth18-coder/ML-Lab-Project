@@ -1,5 +1,5 @@
 {
-  "model_version": "2.1.0-brfss",
+  "model_version": "2.2.0-brfss",
   "estimator": "RandomForestClassifier",
   "dataset_name": "CDC Behavioral Risk Factor Surveillance System (BRFSS) 2015",
   "dataset_provenance": "Centers for Disease Control and Prevention (CDC), Public Domain",
@@ -41,9 +41,16 @@
         "income"
       ]
     },
-    "subsampled": false,
-    "sample_size": 50000,
-    "final_record_count": 50000,
+    "raw_records_count": null,
+    "post_cleaning_eligible_count": 50000,
+    "is_upstream_subsampled": true,
+    "eligible_class_distribution": {
+      "No Reported Diabetes": 42058,
+      "Diabetic": 7022,
+      "Pre-diabetic": 920
+    },
+    "subsampled_in_current_run": false,
+    "selected_cohort_count": 50000,
     "class_distribution": {
       "No Reported Diabetes": 42058,
       "Diabetic": 7022,
@@ -158,6 +165,18 @@
   ],
   "explainer_status": "available",
   "explainer_type": "TreeExplainer",
+  "preprocessing_ablation": "PhysiologicalOutlierCapper(capping_mode='bmi_only') + RobustScaler",
+  "probability_calibration_protocol": "Fold-local preprocessing inside CalibratedClassifierCV(cv=5)",
+  "decision_rules_available": [
+    "argmax",
+    "threshold_tuned"
+  ],
+  "default_decision_rule": "argmax",
+  "thresholds": {
+    "tau_prediabetic": 0.35,
+    "tau_diabetic": 0.52
+  },
+  "pipeline_fit_duration_seconds": 0.362,
   "cv_folds": 5,
   "random_state": 42
 }

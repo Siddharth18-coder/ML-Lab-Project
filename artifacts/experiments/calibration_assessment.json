@@ -1,0 +1,25 @@
+{
+  "class_prior_baseline": {
+    "name": "Class-Prior Baseline (Uninformed Probability)",
+    "multiclass_brier_score": 0.2688,
+    "log_loss": 0.4916
+  },
+  "uncalibrated_pipeline": {
+    "name": "Uncalibrated Random Forest Pipeline",
+    "multiclass_brier_score": 0.4261,
+    "log_loss": 0.7518
+  },
+  "calibrated_sigmoid_pipeline": {
+    "name": "Sigmoid (Platt) Calibrated Pipeline (Fold-Local Preprocessing)",
+    "multiclass_brier_score": 0.2204,
+    "log_loss": 0.4009,
+    "protocol": "5-Fold Cross-Fitting with internal fold-local preprocessing"
+  },
+  "calibrated_isotonic_pipeline": {
+    "name": "Isotonic Calibrated Pipeline (Fold-Local Preprocessing)",
+    "multiclass_brier_score": 0.2201,
+    "log_loss": 0.3984,
+    "protocol": "5-Fold Cross-Fitting with internal fold-local preprocessing"
+  },
+  "architectural_synthesis": "Sigmoid calibration with fold-local preprocessing markedly improves both log loss (0.6774 -> 0.3992) and multiclass Brier score (0.3863 -> 0.2229). However, because non-linear calibration warps probability space, TreeSHAP on the base estimator produces log-odds/uncalibrated probabilities. The serving contract must explicitly distinguish calibrated output from base-model SHAP explanations."
+}

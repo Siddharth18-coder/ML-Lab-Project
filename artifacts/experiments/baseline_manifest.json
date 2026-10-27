@@ -1,0 +1,57 @@
+{
+  "experiment_id": "EXP-00-BASELINE-50K",
+  "name": "Historical 50k Development Baseline",
+  "description": "Historical development benchmark trained on the bundled 50,000-respondent stratified subsample.",
+  "commit_hash": "d319972",
+  "environment": {
+    "python_version": "3.13.3 (main, Apr  8 2025, 13:54:08) [Clang 17.0.0 (clang-1700.0.13.3)]",
+    "platform": "macOS-26.6.2-arm64-arm-64bit-Mach-O",
+    "scikit_learn_version": "1.9.1",
+    "pandas_version": "3.1.0"
+  },
+  "dataset_lineage": {
+    "file_name": "cdc_brfss_diabetes_clean.csv",
+    "file_sha256": "c126b1a9c970d6a4702fe348f4e4b8618d1e461ec5f491f94a83a92a4264131b",
+    "record_count": 50000,
+    "is_upstream_subsampled": true,
+    "upstream_source": "CDC BRFSS 2015 (441,456 raw interviews, 251,117 post-cleaning eligible records)",
+    "upstream_sampling_note": "This bundled cohort was pre-sampled to 50,000 complete-case records; it is not the full eligible dataset."
+  },
+  "artifacts_checksums": {
+    "model_pipeline_sha256": "4b3bdda49db384b5eebab9d6d673b5d4d3ea86f085653781b50a222c3bce91f0",
+    "explainer_sha256": "981832aea5b43b1aa896fbb2372ef42ab016af92a8c5533884a0a25b3a69aa5e",
+    "metadata_sha256": "abf502cfb8b0079af5686091a424bfa93cba1a7cc2e687cb6603865fe525276c",
+    "metrics_sha256": "7377296219b23c7b9af5f2f033232bfb286bef66276e22424a12accc149e3b70"
+  },
+  "hyperparameters": {
+    "estimator": "RandomForestClassifier",
+    "params": {},
+    "preprocessing": "PhysiologicalOutlierCapper(legacy_all_numerical) + RobustScaler"
+  },
+  "split_specification": {
+    "split_type": "Stratified train_test_split (80/20)",
+    "random_state": 42,
+    "n_train": 40000,
+    "n_test": 10000,
+    "status": "historical_inspected_benchmark"
+  },
+  "benchmark_metrics": {
+    "accuracy": 0.7158,
+    "balanced_accuracy": 0.5043,
+    "f1_macro": 0.4365,
+    "f1_weighted": 0.7547,
+    "multiclass_brier_score": 0.3863,
+    "calibration_log_loss": 0.6774,
+    "roc_auc_macro": 0.7623,
+    "per_class_recall": {
+      "No Reported Diabetes": 0.7268,
+      "Pre-diabetic": 0.0489,
+      "Diabetic": 0.7372
+    },
+    "per_class_precision": {
+      "No Reported Diabetes": 0.941,
+      "Pre-diabetic": 0.0236,
+      "Diabetic": 0.3315
+    }
+  }
+}

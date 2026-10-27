@@ -4,22 +4,23 @@ api.py - CDC BRFSS Diabetes Risk Stratification & Explainability REST API
 Data Provenance & Scope:
 Delivers multi-class diabetes risk classification (No Reported Diabetes, Pre-diabetic, Diabetic)
 trained directly on the real-world U.S. Centers for Disease Control and Prevention (CDC)
-Behavioral Risk Factor Surveillance System (BRFSS) dataset (50,000 surveyed cohort).
+Behavioral Risk Factor Surveillance System (BRFSS) dataset.
 
 Key Architectural Guarantees:
-1. Strict Pydantic v2 validation adhering to CDC BRFSS health indicator codes and bounds.
+1. Strict Pydantic v2 validation adhering to CDC BRFSS discrete allowed values and bounds.
 2. Verified TreeSHAP explainability:
    - Features mapped using exact transformed order from ColumnTransformer.get_feature_names_out().
    - Classes mapped dynamically using classifier.classes_.
-   - Base value dynamically extracted from explainer for the predicted class (no fabricated fallbacks).
+   - Base value dynamically extracted from explainer for the chosen class (no fabricated fallbacks).
    - Attributions labeled relative to the explained class ('Supports X' vs 'Opposes X').
    - Additivity check: base_value + sum(shap_values) == model probability output (tol=0.05).
-   - Associations framed scientifically without making unsupported causal medical claims.
-3. Explicit Demo Mode:
-   - POST /predict: strictly evaluates trained real-world ML model pipeline.
-   - POST /demo-predict: rule-based epidemiological demo returning confidence=None, probabilities=None.
+   - If additivity verification fails, returns explicit 'failed_verification' state.
+3. Decision Rules & Calibration Transparency:
+   - Supports 'argmax' (default max-probability) and 'threshold_tuned' (validation-tuned screening cutoffs).
+   - When threshold rule triggers a non-maximal class, confidence represents the class's assigned probability.
+   - Explanations explicitly identify the output space and base estimator.
 4. Truthful operational status:
-   - If model artifacts are missing or corrupt, returns HTTP 503.
+   - Returns HTTP 503 if model artifacts are missing, corrupt, or incompatible.
    - Structured field-level error messages on validation failure (HTTP 422).
    - Non-blocking async inference via threadpool execution.
 """
@@ -49,8 +50,10 @@ from clinical_transformers import (
     CLASS_DEFINITIONS,
     CLASS_NAMES,
     BRFSS_FEATURE_BOUNDS,
-    PhysiologicalOutlierCapper
+    PhysiologicalOutlierCapper,
+    validate_survey_feature_values
 )
+from ml_pipeline import apply_decision_rule
 
 # -----------------------------------------------------------------------------
 # Logging and Path Setup
@@ -64,6 +67,7 @@ logger = logging.getLogger("DiabetesAPI")
 
 PROJECT_ROOT = Path(__file__).resolve().parent
 ARTIFACTS_DIR = PROJECT_ROOT / "artifacts"
+EXPERIMENTS_DIR = ARTIFACTS_DIR / "experiments"
 PIPELINE_PATH = ARTIFACTS_DIR / "model_pipeline.joblib"
 EXPLAINER_PATH = ARTIFACTS_DIR / "explainer.joblib"
 METADATA_PATH = ARTIFACTS_DIR / "metadata.json"
@@ -75,33 +79,44 @@ metadata: Optional[Dict[str, Any]] = None
 metrics_cache: Optional[Dict[str, Any]] = None
 
 
+def validate_artifact_compatibility(
+    loaded_pipeline: Any,
+    loaded_explainer: Any = None,
+    metadata_dict: Optional[Dict[str, Any]] = None
+) -> bool:
+    """
+    Strict validation of artifact compatibility between model pipeline, TreeSHAP explainer,
+    and metadata feature schemas. Prevents serving mismatched or stale artifacts.
+    """
+    if loaded_pipeline is None:
+        raise RuntimeError("Artifact compatibility check failed: pipeline artifact is None.")
+
+    if not hasattr(loaded_pipeline, "named_steps") or "preprocessor" not in loaded_pipeline.named_steps or "classifier" not in loaded_pipeline.named_steps:
+        raise RuntimeError("Artifact compatibility check failed: Pipeline must contain 'preprocessor' and 'classifier' named steps.")
+
+    if metadata_dict is not None and "raw_features_canonical_order" in metadata_dict:
+        raw_order = metadata_dict.get("raw_features_canonical_order", [])
+        if set(raw_order) != set(RAW_INPUT_FEATURES):
+            raise RuntimeError(f"Artifact compatibility check failed: Metadata features {set(raw_order)} do not match canonical {set(RAW_INPUT_FEATURES)}.")
+
+    if loaded_explainer is not None:
+        if hasattr(loaded_explainer, "feature_names") and loaded_explainer.feature_names is not None:
+            if len(loaded_explainer.feature_names) != len(RAW_INPUT_FEATURES):
+                raise RuntimeError(
+                    f"Artifact compatibility check failed: Explainer feature count ({len(loaded_explainer.feature_names)}) "
+                    f"does not match pipeline feature count ({len(RAW_INPUT_FEATURES)})."
+                )
+
+    return True
+
+
 def load_artifacts():
-    """Loads and validates trained model pipeline, explainer, and metadata."""
+    """Loads and validates trained model pipeline, explainer, metadata, and compatibility."""
     global pipeline, explainer, metadata, metrics_cache
     pipeline = None
     explainer = None
     metadata = None
     metrics_cache = None
-
-    if PIPELINE_PATH.exists():
-        try:
-            loaded_pipeline = joblib.load(PIPELINE_PATH)
-            # Compatibility sanity check
-            if hasattr(loaded_pipeline, "named_steps") and "preprocessor" in loaded_pipeline.named_steps:
-                pipeline = loaded_pipeline
-                logger.info("Successfully loaded ML pipeline from %s", PIPELINE_PATH)
-            else:
-                logger.error("Loaded artifact at %s is not a valid scikit-learn pipeline.", PIPELINE_PATH)
-        except Exception as e:
-            logger.error("Failed to load pipeline: %s", e)
-
-    if EXPLAINER_PATH.exists():
-        try:
-            loaded_explainer = joblib.load(EXPLAINER_PATH)
-            explainer = loaded_explainer
-            logger.info("Successfully loaded SHAP explainer from %s", EXPLAINER_PATH)
-        except Exception as e:
-            logger.warning("Could not load SHAP explainer: %s", e)
 
     if METADATA_PATH.exists():
         try:
@@ -119,32 +134,55 @@ def load_artifacts():
         except Exception as e:
             logger.warning("Could not load metrics: %s", e)
 
+    if PIPELINE_PATH.exists():
+        try:
+            loaded_pipeline = joblib.load(PIPELINE_PATH)
+            validate_artifact_compatibility(loaded_pipeline, None, metadata)
+            pipeline = loaded_pipeline
+            logger.info("Successfully loaded ML pipeline from %s", PIPELINE_PATH)
+        except Exception as e:
+            logger.error("Failed to load or validate pipeline: %s", e)
+            pipeline = None
+
+    if EXPLAINER_PATH.exists():
+        try:
+            loaded_explainer = joblib.load(EXPLAINER_PATH)
+            if pipeline is not None:
+                validate_artifact_compatibility(pipeline, loaded_explainer, metadata)
+            explainer = loaded_explainer
+            logger.info("Successfully loaded SHAP explainer from %s", EXPLAINER_PATH)
+        except Exception as e:
+            logger.warning("Could not load SHAP explainer: %s", e)
+            explainer = None
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    """Lifespan context manager replacing deprecated @app.on_event handlers."""
+    logger.info("Starting Diabetes Risk Stratification API...")
     load_artifacts()
     yield
+    logger.info("Shutting down Diabetes Risk Stratification API.")
 
 
+# -----------------------------------------------------------------------------
+# FastAPI Application Initialization
+# -----------------------------------------------------------------------------
 app = FastAPI(
     title="CDC BRFSS Diabetes Risk Stratification API",
     description=(
-        "Public health decision support service for multi-class diabetes risk "
-        "screening and SHAP explainability trained on real CDC BRFSS epidemiological data."
+        "Production-grade, explainable machine learning API trained on CDC BRFSS public health survey data. "
+        "Evaluates 21 population health indicators with verified TreeSHAP local attribution and configurable decision rules."
     ),
-    version="2.1.0",
+    version="2.2.0-brfss",
     lifespan=lifespan
 )
 
-# CORS configuration supporting environment variable or local development
-allowed_origins_raw = os.getenv("CORS_ORIGINS", "http://localhost:3000,http://127.0.0.1:3000,http://localhost:5173,http://127.0.0.1:5173")
-allowed_origins = [o.strip() for o in allowed_origins_raw.split(",") if o.strip()]
-if "*" in allowed_origins or not allowed_origins:
-    allowed_origins = ["*"]
-
+# CORS Configuration
+ALLOWED_ORIGINS = os.getenv("ALLOWED_ORIGINS", "*").split(",")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=allowed_origins,
+    allow_origins=ALLOWED_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -153,27 +191,50 @@ app.add_middleware(
 
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(request: Request, exc: RequestValidationError):
-    """Provides structured, human-readable field-specific validation errors."""
-    error_list = []
-    for err in exc.errors():
-        field_path = " -> ".join(str(loc) for loc in err.get("loc", []) if loc != "body")
-        error_list.append({
-            "field": field_path,
-            "message": err.get("msg", "Validation failed"),
-            "type": err.get("type", "value_error")
+    """
+    Structured validation error handler providing clear, field-level diagnostics
+    rather than unformatted internal errors.
+    """
+    errors = []
+    for error in exc.errors():
+        loc = error.get("loc", [])
+        field = str(loc[-1]) if loc else "general"
+        msg = error.get("msg", "Invalid value")
+        err_type = error.get("type", "value_error")
+
+        # Clinical boundary clarification for common fields
+        if field == "bmi":
+            friendly_msg = f"BMI must be between 12.0 and 70.0 kg/m² (received: {error.get('input')})."
+        elif field in ["ment_hlth", "phys_hlth"]:
+            friendly_msg = f"Health days must be an integer between 0 and 30 days (received: {error.get('input')})."
+        elif field in ["high_bp", "high_chol", "smoker", "stroke", "heart_disease_or_attack", "phys_activity", "diff_walk", "sex"]:
+            friendly_msg = f"Field '{field}' requires a binary indicator: 1 (Yes) or 0 (No)."
+        elif field == "gen_hlth":
+            friendly_msg = "General health must be rated 1 (Excellent), 2 (Very Good), 3 (Good), 4 (Fair), or 5 (Poor)."
+        elif field == "age":
+            friendly_msg = "Age category must be between 1 (18-24 years) and 13 (80+ years)."
+        else:
+            friendly_msg = msg
+
+        errors.append({
+            "field": field,
+            "message": friendly_msg,
+            "error_type": err_type
         })
+
     return JSONResponse(
         status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
         content={
             "status": "validation_error",
-            "message": "Input validation failed. Please check the supplied survey indicators.",
-            "errors": error_list
+            "detail": "Input validation failed. Please check the following survey indicators.",
+            "errors": errors,
+            "timestamp": datetime.now(timezone.utc).isoformat()
         }
     )
 
 
 # -----------------------------------------------------------------------------
-# Pydantic Schemas: CDC BRFSS 21 Health Indicators
+# Data Models and Schemas
 # -----------------------------------------------------------------------------
 class PatientData(BaseModel):
     """
@@ -234,6 +295,12 @@ class PatientData(BaseModel):
         default=5, ge=1, le=8, description="Annual household income bracket: 1=<$10k ... 5=<$35k ... 8=>=$75k"
     )
 
+    # Optional decision rule preference
+    decision_rule: Optional[Literal["argmax", "threshold_tuned"]] = Field(
+        default="argmax",
+        description="Decision rule: 'argmax' (max probability) or 'threshold_tuned' (validation-tuned screening thresholds)"
+    )
+
 
 class FeatureContribution(BaseModel):
     feature: str
@@ -255,7 +322,7 @@ class AdditivityCheck(BaseModel):
 
 
 class SHAPExplanation(BaseModel):
-    status: Literal["available", "unavailable"]
+    status: Literal["available", "unavailable", "failed_verification", "not_applicable"]
     reason: Optional[str] = None
     explained_class: Optional[str] = None
     explained_class_id: Optional[int] = None
@@ -270,6 +337,8 @@ class PredictionResult(BaseModel):
     class_id: int
     risk_class: Literal["No Reported Diabetes", "Pre-diabetic", "Diabetic"]
     confidence: Optional[float] = None
+    probability_assigned: Optional[float] = None
+    decision_rule_applied: Literal["argmax_max_probability", "validation_tuned_thresholds"] = "argmax_max_probability"
     probabilities: Optional[Dict[str, float]] = None
 
 
@@ -285,7 +354,7 @@ class ResponseMetadata(BaseModel):
     model_version: Optional[str] = None
     model_type: Optional[str] = None
     dataset_type: Optional[str] = None
-    explanation_status: Literal["available", "unavailable", "not_applicable"]
+    explanation_status: Literal["available", "unavailable", "failed_verification", "not_applicable"]
     explanation_method: Optional[str] = None
     probability_calibration: str = "uncalibrated_ensemble_vote"
     imputed_features: List[str] = []
@@ -329,17 +398,11 @@ def generate_feature_clinical_insight(feature: str, value: Any, shap_val: float,
     elif feature == "phys_activity":
         status_txt = "active in past 30 days" if value == 1 else "sedentary lifestyle (no past 30 days activity)"
         return f"Reported {status_txt}; statistically {verb} the '{explained_class}' prediction."
-    elif feature == "smoker":
-        status_txt = "history of smoking (>=100 cigarettes)" if value == 1 else "non-smoker"
-        return f"Reported {status_txt}; statistically {verb} the '{explained_class}' prediction."
     elif feature == "diff_walk":
-        status_txt = "mobility limitation (difficulty walking/stairs)" if value == 1 else "no walking limitations"
+        status_txt = "mobility limitation (difficulty walking/stairs)" if value == 1 else "no mobility difficulty"
         return f"Reported {status_txt}; statistically {verb} the '{explained_class}' prediction."
-    elif feature == "heart_disease_or_attack":
-        status_txt = "cardiovascular comorbidity (CHD/MI)" if value == 1 else "no cardiovascular comorbidity"
-        return f"Reported {status_txt}; statistically {verb} the '{explained_class}' prediction."
-    elif feature == "stroke":
-        status_txt = "history of stroke" if value == 1 else "no stroke history"
+    elif feature == "smoker":
+        status_txt = "history of smoking (>=100 cigarettes)" if value == 1 else "never smoked >=100 cigarettes"
         return f"Reported {status_txt}; statistically {verb} the '{explained_class}' prediction."
     else:
         disp_name = FEATURE_DISPLAY_NAMES.get(feature, feature)
@@ -401,7 +464,7 @@ def generate_clinical_recommendations(risk_class: str, patient: PatientData) -> 
 # -----------------------------------------------------------------------------
 @app.get("/health")
 async def health_check():
-    """Health check endpoint exposing readiness and artifact status."""
+    """Health check endpoint exposing readiness and loaded artifact metadata."""
     return {
         "status": "healthy" if pipeline is not None else "degraded",
         "service": "CDC BRFSS Diabetes Risk Stratification API",
@@ -432,6 +495,27 @@ async def get_metrics():
             detail="Evaluation metrics artifact (artifacts/model_metrics.json) is not loaded."
         )
     return metrics_cache
+
+
+@app.get("/experiments")
+async def list_experiments():
+    """Returns master experiment manifest and registered empirical investigation files."""
+    manifest_path = EXPERIMENTS_DIR / "experiment_manifest.json"
+    if not manifest_path.exists():
+        raise HTTPException(status_code=404, detail="Experiment manifest not generated yet.")
+    with open(manifest_path, "r", encoding="utf-8") as f:
+        return json.load(f)
+
+
+@app.get("/experiments/{experiment_name}")
+async def get_experiment_details(experiment_name: str):
+    """Retrieves specific experiment results JSON (learning_curves, preprocessing_ablation, etc.)."""
+    safe_name = f"{experiment_name}.json" if not experiment_name.endswith(".json") else experiment_name
+    exp_file = EXPERIMENTS_DIR / safe_name
+    if not exp_file.exists():
+        raise HTTPException(status_code=404, detail=f"Experiment artifact '{safe_name}' not found.")
+    with open(exp_file, "r", encoding="utf-8") as f:
+        return json.load(f)
 
 
 @app.get("/sample-patients")
@@ -477,21 +561,34 @@ async def get_sample_patients():
 def _run_inference(patient_data: PatientData) -> PredictionResponse:
     """Synchronous inference helper executed inside run_in_threadpool."""
     raw_dict = patient_data.model_dump()
+    req_rule = raw_dict.pop("decision_rule", "argmax") or "argmax"
     input_df = pd.DataFrame([raw_dict])[RAW_INPUT_FEATURES]
 
     classifier = pipeline.named_steps["classifier"]
     classes_ = list(classifier.classes_)
 
     probs = pipeline.predict_proba(input_df)[0]
-    col_idx = int(np.argmax(probs))
-    predicted_class_id = int(classes_[col_idx])
-    confidence = float(np.max(probs))
-    risk_name = CLASS_DEFINITIONS[predicted_class_id]
 
+    # Map probability dictionary
     prob_dict = {
         CLASS_DEFINITIONS[int(cls_id)]: float(np.round(probs[c_idx], 4))
         for c_idx, cls_id in enumerate(classes_)
     }
+
+    # Evaluate decision rule
+    pred_classes, assigned_probs = apply_decision_rule(
+        probs,
+        classes=classes_,
+        rule_type=req_rule,
+        threshold_diabetic=0.52,
+        threshold_prediabetic=0.35
+    )
+    predicted_class_id = int(pred_classes[0])
+    assigned_prob = float(assigned_probs[0])
+    confidence = assigned_prob  # Never display maximum probability for a different class!
+    rule_applied = "validation_tuned_thresholds" if req_rule == "threshold_tuned" else "argmax_max_probability"
+
+    risk_name = CLASS_DEFINITIONS[predicted_class_id]
 
     # SHAP local attribution using exact transformed feature order
     top_features: List[FeatureContribution] = []
@@ -511,10 +608,8 @@ def _run_inference(patient_data: PatientData) -> PredictionResponse:
 
             shap_raw = explainer.shap_values(X_trans)
             if isinstance(shap_raw, np.ndarray) and len(shap_raw.shape) == 3:
-                # Shape: (n_samples, n_features, n_classes)
                 shap_cls = shap_raw[0, :, col_idx]
             elif isinstance(shap_raw, list):
-                # List of arrays per class: shap_raw[col_idx] has shape (n_samples, n_features)
                 shap_cls = np.array(shap_raw[col_idx])[0]
             else:
                 shap_cls = np.array(shap_raw)[0]
@@ -535,7 +630,6 @@ def _run_inference(patient_data: PatientData) -> PredictionResponse:
                 disp = FEATURE_DISPLAY_NAMES.get(feat_name, feat_name)
                 direction = "supports" if s_val > 0 else ("opposes" if s_val < 0 else "neutral")
                 prefix = "Supports" if s_val > 0 else "Opposes"
-                # Percentage point description
                 pp_val = s_val * 100.0
                 impact_str = f"{prefix} {risk_name} prediction ({pp_val:+.1f} percentage points)"
                 insight = generate_feature_clinical_insight(feat_name, p_val, s_val, risk_name)
@@ -550,7 +644,6 @@ def _run_inference(patient_data: PatientData) -> PredictionResponse:
                     clinical_insight=insight
                 ))
 
-            # Sort by absolute contribution magnitude
             feature_shaps.sort(key=lambda f: abs(f.shap_value), reverse=True)
             top_features = feature_shaps[:8]
 
@@ -561,15 +654,21 @@ def _run_inference(patient_data: PatientData) -> PredictionResponse:
             model_out = float(probs[col_idx])
             abs_diff = float(abs(reconstructed - model_out))
 
+            is_additive = (abs_diff < 0.05)
             additivity_check = AdditivityCheck(
                 base_value=float(np.round(base_value, 4)),
                 all_features_shap_sum=float(np.round(all_shap_sum, 4)),
                 reconstructed_output=float(np.round(reconstructed, 4)),
                 model_output=float(np.round(model_out, 4)),
                 absolute_difference=float(np.round(abs_diff, 4)),
-                is_additive=(abs_diff < 0.05)
+                is_additive=is_additive
             )
-            shap_status = "available"
+
+            if is_additive:
+                shap_status = "available"
+            else:
+                shap_status = "failed_verification"
+                shap_reason = f"Additivity difference ({abs_diff:.4f}) exceeds tolerance (0.05)."
 
         except Exception as e:
             logger.error("SHAP explanation failed: %s", e)
@@ -582,7 +681,7 @@ def _run_inference(patient_data: PatientData) -> PredictionResponse:
         status="success",
         metadata=ResponseMetadata(
             prediction_source="trained_model",
-            model_version=metadata.get("model_version", "2.1.0-brfss") if metadata else "2.1.0-brfss",
+            model_version=metadata.get("model_version", "2.2.0-brfss") if metadata else "2.2.0-brfss",
             model_type=type(pipeline.named_steps["classifier"]).__name__,
             dataset_type="real_cdc_brfss_2015",
             explanation_status=shap_status,
@@ -595,14 +694,16 @@ def _run_inference(patient_data: PatientData) -> PredictionResponse:
             class_id=predicted_class_id,
             risk_class=risk_name,
             confidence=float(np.round(confidence, 4)),
+            probability_assigned=float(np.round(assigned_prob, 4)),
+            decision_rule_applied=rule_applied,
             probabilities=prob_dict
         ),
         shap_explanation=SHAPExplanation(
             status=shap_status,
             reason=shap_reason,
-            explained_class=risk_name if shap_status == "available" else None,
-            explained_class_id=predicted_class_id if shap_status == "available" else None,
-            output_space="probability" if shap_status == "available" else None,
+            explained_class=risk_name,
+            explained_class_id=predicted_class_id,
+            output_space="probability",
             base_value=float(np.round(base_value, 4)) if base_value is not None else None,
             top_features=top_features,
             omitted_features_shap_sum=omitted_sum,
@@ -614,41 +715,53 @@ def _run_inference(patient_data: PatientData) -> PredictionResponse:
 
 
 @app.post("/predict", response_model=PredictionResponse)
-async def predict_diabetes(patient: PatientData):
+async def predict_diabetes_risk(patient: PatientData):
     """
-    Main inference endpoint evaluating the trained Scikit-Learn pipeline and TreeSHAP.
-    Runs non-blocking in threadpool.
+    Evaluates trained CDC BRFSS machine learning pipeline and returns class prediction,
+    assigned class probability, applied decision rule, and verified TreeSHAP feature attributions.
     """
     if pipeline is None:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Trained ML pipeline artifact (artifacts/model_pipeline.joblib) is not loaded."
+            detail="Machine learning model pipeline is not loaded or artifact is missing (artifacts/model_pipeline.joblib). Run ml_pipeline.py."
         )
 
     try:
-        response = await run_in_threadpool(_run_inference, patient)
-        return response
+        return await run_in_threadpool(_run_inference, patient)
     except Exception as e:
-        logger.error("Inference pipeline error: %s", e)
-        raise HTTPException(status_code=500, detail=f"Inference error: {str(e)}")
+        logger.error("Inference execution failed: %s", e, exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Inference error: {str(e)}"
+        )
 
 
 @app.post("/demo-predict", response_model=PredictionResponse)
-async def predict_demo_rules(patient: PatientData):
+async def demo_predict_diabetes_risk(patient: PatientData):
     """
-    Explicit Rule-based epidemiological demonstration.
-    Returns confidence=None and probabilities=None with explicit demo labeling.
+    Explicit Opt-In Rule-Based Demo Endpoint.
+    Evaluates project-defined epidemiological heuristics rather than the ML model.
+    Omits confidence, probabilities, and TreeSHAP attributions.
     """
-    # Project-defined Epidemiological Threshold Heuristic
-    if patient.high_bp == 1 and patient.high_chol == 1 and patient.bmi >= 30.0 and patient.age >= 9:
-        cls_id = 2
+    score = 0
+    if patient.high_bp == 1: score += 2
+    if patient.high_chol == 1: score += 2
+    if patient.bmi >= 30.0: score += 3
+    elif patient.bmi >= 25.0: score += 1
+    if patient.age >= 9: score += 2
+    elif patient.age >= 6: score += 1
+    if patient.gen_hlth >= 4: score += 2
+    if patient.phys_activity == 0: score += 1
+
+    if score >= 6:
         risk_name = "Diabetic"
-    elif patient.high_bp == 1 and patient.high_chol == 1 and patient.bmi >= 27.0:
-        cls_id = 1
+        predicted_class_id = 2
+    elif score >= 3:
         risk_name = "Pre-diabetic"
+        predicted_class_id = 1
     else:
-        cls_id = 0
         risk_name = "No Reported Diabetes"
+        predicted_class_id = 0
 
     recs = generate_clinical_recommendations(risk_name, patient)
 
@@ -656,24 +769,33 @@ async def predict_demo_rules(patient: PatientData):
         status="demo",
         metadata=ResponseMetadata(
             prediction_source="rule_based_demo",
-            model_version=None,
-            model_type="Project-Defined Epidemiological Heuristic",
-            dataset_type="none",
-            explanation_status="not_applicable",
+            model_version="heuristic-demo",
+            model_type="EpidemiologicalRuleHeuristic",
+            dataset_type="heuristic_rules",
+            explanation_status="unavailable",
             explanation_method=None,
             probability_calibration="none",
             imputed_features=[],
-            disclaimer="Explicit rule-based demonstration mode. Not a trained model prediction."
+            disclaimer="Rule-based illustrative demo mode. Not an ML model prediction."
         ),
         prediction=PredictionResult(
-            class_id=cls_id,
+            class_id=predicted_class_id,
             risk_class=risk_name,
             confidence=None,
+            probability_assigned=None,
+            decision_rule_applied="argmax_max_probability",
             probabilities=None
         ),
         shap_explanation=SHAPExplanation(
             status="unavailable",
-            reason="SHAP explanations are not applicable to the rule-based demonstration mode."
+            reason="SHAP feature attribution is omitted in rule-based demo mode.",
+            explained_class=risk_name,
+            explained_class_id=predicted_class_id,
+            output_space=None,
+            base_value=None,
+            top_features=[],
+            omitted_features_shap_sum=None,
+            additivity_check=None
         ),
         clinical_recommendations=recs,
         timestamp=datetime.now(timezone.utc).isoformat()

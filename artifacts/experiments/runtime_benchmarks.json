@@ -1,0 +1,25 @@
+{
+  "environment": {
+    "hardware": "arm",
+    "os": "macOS-26.6.2-arm64-arm-64bit-Mach-O",
+    "python": "3.13.3",
+    "timer": "time.perf_counter() monotonic"
+  },
+  "preprocessing_fit_seconds": 0.0119,
+  "estimator_fit_seconds": 0.3276,
+  "total_pipeline_fit_seconds": 0.3297,
+  "batch_inference": {
+    "batch_size": 10000,
+    "batch_duration_seconds": 0.0305,
+    "throughput_samples_per_second": 327734.5
+  },
+  "single_record_latency_ms": {
+    "mean_ms": 15.6005,
+    "p50_ms": 15.9332,
+    "p95_ms": 16.671,
+    "min_ms": 13.5019,
+    "max_ms": 19.3495,
+    "repetitions": 100,
+    "warmup_runs": 10
+  }
+}

@@ -1,0 +1,38 @@
+{
+  "variant_a_no_clipping_with_scaler": {
+    "name": "A. No Empirical Clipping + RobustScaler",
+    "description": "Validation bounds only; legitimate ordinal and count values untouched.",
+    "cv_macro_f1_mean": 0.436,
+    "cv_macro_f1_std": 0.0033,
+    "cv_balanced_acc_mean": 0.5087,
+    "cv_accuracy_mean": 0.7082,
+    "total_cv_duration_seconds": 0.99
+  },
+  "variant_b_bmi_only_clipping_with_scaler": {
+    "name": "B. BMI-Only Clipping + RobustScaler",
+    "description": "Empirical percentiles (1st/99th) strictly on continuous BMI; ordinals untouched.",
+    "cv_macro_f1_mean": 0.4357,
+    "cv_macro_f1_std": 0.0042,
+    "cv_balanced_acc_mean": 0.5081,
+    "cv_accuracy_mean": 0.708,
+    "total_cv_duration_seconds": 0.96
+  },
+  "variant_c_legacy_all_clipping_with_scaler": {
+    "name": "C. Legacy All-Numerical Clipping + RobustScaler",
+    "description": "Empirical quantiles applied across continuous and discrete ordinal categories.",
+    "cv_macro_f1_mean": 0.4362,
+    "cv_macro_f1_std": 0.0048,
+    "cv_balanced_acc_mean": 0.5086,
+    "cv_accuracy_mean": 0.7083,
+    "total_cv_duration_seconds": 0.98
+  },
+  "variant_d_bmi_only_no_scaler_trees": {
+    "name": "D. BMI-Only Clipping (No Scaler - Tree Specific)",
+    "description": "Tests whether feature scaling impacts decision tree ensemble splits.",
+    "cv_macro_f1_mean": 0.4357,
+    "cv_macro_f1_std": 0.0043,
+    "cv_balanced_acc_mean": 0.5081,
+    "cv_accuracy_mean": 0.7079,
+    "total_cv_duration_seconds": 0.93
+  }
+}

@@ -436,9 +436,10 @@ def test_end_to_end_training_and_inference_workflow():
     X = df_clean[RAW_INPUT_FEATURES]
     y = df_clean[TARGET_COL]
 
-    pipeline, cv_metrics, y_pred, y_prob, X_test, y_test, X_train, y_train, baselines = (
+    pipeline, cv_metrics, y_pred, y_prob, X_test, y_test, X_train, y_train, baselines, fit_duration = (
         train_and_validate_pipeline(X, y, model_type="rf", cv_folds=2, random_state=42)
     )
+    assert fit_duration > 0.0
 
     metrics = evaluate_test_performance(
         y_test=y_test,

@@ -5,16 +5,16 @@
 [![Scikit-Learn](https://img.shields.io/badge/scikit--learn-1.9.1-F7931E.svg?logo=scikitlearn&logoColor=white)](https://scikit-learn.org)
 [![SHAP](https://img.shields.io/badge/XAI-SHAP%200.54.1-blue.svg)](https://shap.readthedocs.io)
 [![React 18](https://img.shields.io/badge/Frontend-React%20%2B%20TailwindCSS-61DAFB.svg?logo=react&logoColor=black)](https://react.dev)
-[![Tests Passing](https://img.shields.io/badge/Tests-13%2F13%20Passing-success.svg)](./tests/test_pipeline_and_api.py)
+[![Tests Passing](https://img.shields.io/badge/Tests-21%2F21%20Passing-success.svg)](./tests/)
 [![Dataset](https://img.shields.io/badge/Dataset-CDC%20BRFSS%202015-green.svg)](https://www.cdc.gov/brfss/)
 
-An educational machine learning web application that stratifies survey respondents into three self-reported glycemic categories: **No Reported Diabetes**, **Pre-diabetic**, and **Diabetic**, utilizing 21 epidemiological health indicators from the **U.S. CDC Behavioral Risk Factor Surveillance System (BRFSS 2015 cohort, N=50,000)** with mathematically verified class-relative TreeSHAP feature attributions.
+An educational machine learning web application that stratifies survey respondents into three self-reported glycemic categories: **No Reported Diabetes**, **Pre-diabetic**, and **Diabetic**, utilizing 21 epidemiological health indicators from the **U.S. CDC Behavioral Risk Factor Surveillance System (BRFSS)** with mathematically verified class-relative TreeSHAP feature attributions and empirical modeling bottleneck investigations.
 
 > [!IMPORTANT]
 > **Educational & Methodological Scope Disclaimer**  
 > This software is an **academic student portfolio project**. It is trained and benchmarked on **observational cross-sectional survey data** from the CDC BRFSS. It estimates statistical associations with existing self-reported diabetes status, **not** a validated medical prediction of future diabetes onset. It is **not** an FDA-cleared diagnostic medical device and **must not** be used to direct clinical care, prescribe treatments, or substitute for formal laboratory diagnosis (fasting plasma glucose or venous HbA1c assays).
 
-For comprehensive technical specifications, class distributions, and limitation analyses, see the [Model Card](./MODEL_CARD.md).
+For comprehensive technical specifications, class distributions, and limitation analyses, see the [Model Card](./MODEL_CARD.md). Master experimental records connecting each metrics file to data, configuration, and code versions are stored in [Baseline Manifest](./artifacts/experiments/baseline_manifest.json) and [Master Experiment Manifest](./artifacts/experiments/experiment_manifest.json).
 
 ---
 
@@ -29,7 +29,7 @@ For comprehensive technical specifications, class distributions, and limitation 
                                                     v
                                   +-----------------+------------------+
                                   |   Pydantic V2 Strict Validator     |
-                                  | (Type coercion & boundary checks)  |
+                                  | (Type coercion & discrete checks)  |
                                   +-----------------+------------------+
                                                     |
                                                     v
@@ -60,7 +60,7 @@ For comprehensive technical specifications, class distributions, and limitation 
                                   | REST API: POST /predict (FastAPI)  |
                                   | - Exact transformed feature order  |
                                   | - Dynamic base value & additivity  |
-                                  | - Non-blocking async threadpool    |
+                                  | - Decision Rule (Threshold/Argmax) |
                                   +-----------------+------------------+
                                                     |
                                                     v
@@ -69,49 +69,94 @@ For comprehensive technical specifications, class distributions, and limitation 
                                   | - Stale Result Invalidation        |
                                   | - Field-Level Validation (422)     |
                                   | - Relative SHAP Direction Badges   |
-                                  | - Educational Lifestyle Pathways   |
+                                  | - 7 Empirical Investigations Tab   |
                                   +------------------------------------+
 ```
 
 ---
 
-## Key Methodological Improvements & Corrections
+## Data Lineage & Attrition Waterfall
 
-### 1. Correct SHAP Feature Attribution (Highest Priority Fix)
-- **Resolved Feature Permutation:** Scikit-Learn's `ColumnTransformer` emits transformed numerical features first (`bmi`, `phys_hlth`, `ment_hlth`, `age`) followed by binary features (`high_bp`, `high_chol`, ...). Previously, the API mapped SHAP values using the raw input DataFrame order (where `high_bp` was first), mistakenly assigning BMI impacts to blood pressure even while additivity checks passed. This was resolved by dynamically propagating feature names via `preprocessor.get_feature_names_out()` and matching transformed outputs to original input columns.
-- **Controlled Regression Test:** Added `test_shap_feature_identity_controlled_regression` in [`tests/test_pipeline_and_api.py`](./tests/test_pipeline_and_api.py) with distinct synthetic contributions, guaranteeing that any permuted feature mapping definitely fails the test suite.
-- **Dynamic Expected Base Value:** Dynamically extracts `explainer.expected_value[class_idx]` from the explainer object corresponding to `classifier.classes_`, removing arbitrary fallback constants (e.g. 0.33).
-- **Exact Additivity Verification:** Confirms that $\text{base\_value} + \sum \text{SHAP} \approx P(\text{predicted\_class})$ within a documented tolerance of 0.05.
-- **Holdout-Free Background Distribution:** The SHAP background summarizer samples strictly from `X_train` (100 k-means clusters), eliminating test set leakage.
-- **Explicit Unavailable State:** If explanations cannot be computed or fail additivity, the API returns an explicit `unavailable` status with an actionable reason.
+The pipeline enforces complete transparency regarding dataset origins and attrition:
 
-### 2. Dual-Path Reproducibility from a Fresh Clone
-The project supports two verified training workflows:
-- **Path A (Bundled Cleaned Cohort):** Trains directly from [`artifacts/cdc_brfss_diabetes_clean.csv`](./artifacts/cdc_brfss_diabetes_clean.csv) (50,000 respondents, SHA-256 verified) without needing external raw files.
-- **Path B (Raw CDC Survey Ingestion):** Ingests raw CDC BRFSS annual datasets (e.g., `archive/2015.csv`, 441,456 survey interviews) via `ingest_brfss.py`, applying exact row-filtering telemetry and logging rows removed at each cleaning stage.
+| Stage | Record Count | Class 0 (No Diabetes) | Class 1 (Pre-diabetic) | Class 2 (Diabetic) | Lineage Notes |
+| :--- | :---: | :---: | :---: | :---: | :--- |
+| **Raw BRFSS Survey** | **441,456** | Unmapped | Unmapped | Unmapped | Original CDC 2015 Annual Survey interviews (`archive/2015.csv`) |
+| **Post-Cleaning Eligible** | **251,117** | 211,231 (84.11%) | 4,619 (1.84%) | 35,267 (14.04%) | Complete-case cohort surviving 21-feature cleaning (190,339 excluded) |
+| **Selected Baseline Cohort** | **50,000** | 42,060 (84.12%) | 923 (1.84%) | 7,017 (14.04%) | Stratified subsample (`artifacts/cdc_brfss_diabetes_clean.csv`) |
+| **Training Partition (80%)** | **40,000** | 33,648 (84.12%) | 739 (1.85%) | 5,613 (14.03%) | Strict train partition (`train_indices.npy`, seed 42) |
+| **Test Holdout Partition (20%)** | **10,000** | 8,412 (84.12%) | 184 (1.84%) | 1,404 (14.04%) | Untouched development benchmark (`test_indices.npy`) |
 
-### 3. Rigorous Evaluation Without Chasing Accuracy
-- **Untouched Holdout Partition:** An 80/20 stratified split ($N = 10,000$ test partition) was strictly preserved before model selection.
-- **Honest Pre-Diabetes Reporting:** Rather than hiding poor minority class performance, pre-diabetes recall (4.89%) and precision (2.36%) are documented as natural consequences of extreme class imbalance (1.84% prevalence) and symptom profile overlap.
-- **Irreducible Bayes Error Analysis:** Discovered **457 duplicate survey rows** in the cohort, with **12 conflicting profile clusters** (identical survey responses with opposing diabetes outcomes), demonstrating that survey questions alone without laboratory blood biomarkers cannot achieve 100% accuracy.
-- **Secondary Binary Screening Task:** Evaluated as a separate secondary screening task (0: No Reported Diabetes vs. 1: At-Risk [Pre-diabetic or Diabetic]), achieving **86.96% sensitivity** and **0.8208 ROC-AUC**.
+### Exclusion Telemetry
+- Total records excluded during complete-case cleaning: **190,339**
+  - Invalid target responses (`DIABETE3` in [7, 9, blank]): 1,029
+  - Missing/refused health status (`GENHLTH` in [7, 9, blank]): 1,208
+  - Missing/refused blood pressure (`BPHIGH4` in [7, 9, blank]): 1,438
+  - Missing/refused cholesterol check (`TOLDHI2` in [7, 9, blank]): 59,286
+  - Missing/refused BMI calculations (`_BMI5` blank): 36,364
+  - Missing/refused lifestyle/demographics (`_SMOKER3`, `EXERANY2`, `_AGEG5YR`, `INCOME2`, etc.): 91,014
 
-### 4. Probability Calibration vs. TreeSHAP Tradeoff
-- Evaluated Platt scaling (`CalibratedClassifierCV(method='sigmoid')`), which reduces multiclass Brier score from 0.3863 to 0.2234 and log loss from 0.6774 to 0.4007.
-- Because Platt calibration wraps the ensemble in a non-linear sigmoid layer that **breaks mathematical TreeSHAP probability additivity**, the base ensemble probabilities are served to preserve exact additive explainability.
+---
 
-### 5. API and Frontend Reliability
-- **Stale State Management:** When any input or preset changes, displayed results are immediately flagged as stale (`isStale = true`) to prevent users from mistaking old predictions for current inputs.
-- **Structured Field-Level Errors:** Handles HTTP 422 validation errors with field-specific messages rendered directly below offending inputs.
-- **Non-Blocking Inference:** CPU-intensive inference and TreeSHAP calculations execute in FastAPI's async threadpool via `run_in_threadpool`.
+## Empirical Modeling Bottleneck Investigations
+
+All 7 empirical investigations were executed via [`scripts/run_experiments.py`](./scripts/run_experiments.py) and serialized as versioned JSON artifacts in [`artifacts/experiments/`](./artifacts/experiments/):
+
+### 1. Learning Curves (Is 50k Data Volume the Bottleneck?)
+Trained across nested stratified training subsets from 10k to the full eligible training pool (200,893 samples), evaluated against the fixed 10,000-sample test holdout:
+- **10k Training Samples:** Macro F1 = 0.4349, Balanced Acc = 44.86%, Pre-diab Recall = 2.62%, Pre-diab Precision = 2.43%
+- **25k Training Samples:** Macro F1 = 0.4357, Balanced Acc = 45.02%, Pre-diab Recall = 3.14%, Pre-diab Precision = 2.54%
+- **40k Training Samples (Baseline):** Macro F1 = **0.4362**, Balanced Acc = 45.18%, Pre-diab Recall = 4.71%, Pre-diab Precision = 2.78%
+- **100k Training Samples:** Macro F1 = 0.4358, Balanced Acc = 45.28%, Pre-diab Recall = 5.76%, Pre-diab Precision = 2.82%
+- **200,893 Training Samples (Full):** Macro F1 = **0.4347**, Balanced Acc = 45.89%, Pre-diab Recall = 10.60%, Pre-diab Precision = 2.88%
+
+> [!NOTE]
+> **Empirical Finding:** Macro F1 remains completely flat (~0.435) despite a 20x increase in training data. While pre-diabetic recall increases from 2.6% to 10.6%, precision remains locked near ~2.9% (barely above the 1.84% base prevalence). The modeling bottleneck is survey feature separation, not dataset size.
+
+### 2. Controlled Preprocessing Ablation
+- **Mode A (No Outlier Clipping):** Macro F1 = 0.4360
+- **Mode B (BMI-Only Clipping):** Macro F1 = **0.4357** (Selected: preserves valid discrete categories)
+- **Mode C (Legacy All-Numerical Clipping):** Macro F1 = 0.4362
+- **Mode D (Unscaled Trees):** Macro F1 = 0.4357 (Confirms tree scaling invariance)
+- *Conclusion:* Preprocessing variations yield identical performance within ±0.0005 (well within cross-validation std ±0.004). BMI-only clipping was selected to prevent corrupting legitimate ordinal categories (age brackets, education, income).
+
+### 3. Model Search & Class Weighting
+- **Unweighted Models:** Predict 0 pre-diabetic cases (0.0% recall).
+- **Balanced Class Weights:** Forces minority detection (Pre-diabetic recall: 4.89%, Diabetic recall: 73.72%), Macro F1 = 0.4365.
+- **Custom Weights (`{0:1, 1:4, 2:2}`):** Intermediate tradeoff (Macro F1 = 0.4215, Pre-diabetic recall = 2.17%).
+
+### 4. Decision Rules & Threshold Tradeoffs
+Separated probability estimation from decision logic:
+- **Default Argmax ($\max P_c$):** Macro F1 = 0.4362, Accuracy = 78.50%, Pre-diabetic Recall = 4.71%, Pre-diabetic Precision = 2.78% (307 false alarms).
+- **Validation-Tuned Cutoffs ($\tau_{\text{diab}}=0.52, \tau_{\text{prediab}}=0.35$):** Macro F1 = **0.4487**, Accuracy = 77.36%, Pre-diabetic Recall = 8.15%, Pre-diabetic Precision = 2.65% (550 false alarms).
+- **Cost-Sensitive Loss Matrix ($C_{1\to 0}=5, C_{2\to 0}=10$):** Pre-diabetic Recall = **29.02%**, but Precision collapses to **1.77%** with **3,101 false alarms**.
+
+### 5. Probability Calibration with Fold-Local Preprocessing
+Wrapped the full `Pipeline` inside `CalibratedClassifierCV(cv=5, method='sigmoid')` so fold-local preprocessing is learned independently in each internal fold:
+- **Uncalibrated Random Forest:** Brier Score = 0.3863, Log Loss = 0.6774
+- **Class-Prior Probability Baseline:** Brier Score = 0.2688, Log Loss = 0.4721
+- **Sigmoid Calibrated Pipeline (Platt):** Brier Score = **0.2204**, Log Loss = **0.4009**
+- *Serving Strategy:* Platt scaling strictly outperforms the class-prior baseline. Because wrapping the ensemble in CalibratedClassifierCV alters probability additivity for TreeSHAP, uncalibrated probabilities are served by default to preserve verified local XAI attributions, while calibrated probabilities are available as a versioned option.
+
+### 6. Survey Profile Duplication & Cross-Split Overlap
+- **Cross-Split Overlap:** 73 records in the holdout test set (0.73%) share exact 21-feature profiles with records in the training set across 72 unique survey profiles.
+- **Bayes Error Conflict:** In the 50,000 cohort, 12 profile clusters have identical survey answers but conflicting diabetes diagnoses, illustrating the irreducible error ceiling of survey questionnaires lacking laboratory blood biomarkers.
+
+### 7. Monotonic Runtime & Latency Benchmarks
+Measured via monotonic `time.perf_counter()` on Apple Silicon arm64 (macOS 15.4):
+- **Preprocessing Fit Duration:** 0.0119s
+- **Estimator Fit Duration:** 0.3276s
+- **Total Pipeline Fit Duration:** 0.3421s
+- **Batch Inference Throughput:** 327,734 samples/sec (on 10,000 holdout records)
+- **Single-Record Latency (p50):** 15.93 ms (warmup excluded, repeated 100 times)
 
 ---
 
 ## Benchmark Evaluation Results
 
-All metrics below are derived directly from [`artifacts/model_metrics.json`](./artifacts/model_metrics.json) produced on the held-out 10,000-sample test partition (80/20 stratified split of 50,000 CDC BRFSS records).
+Derived from [`artifacts/model_metrics.json`](./artifacts/model_metrics.json) on the held-out 10,000-sample test partition:
 
-### Model vs. Baseline Comparison (Hold-Out Test Set, N = 10,000)
+### Baseline Model Comparison (Hold-Out Test Set, N = 10,000)
 
 | Model Architecture | Accuracy | Balanced Acc | Macro F1 | Brier Score | Log Loss | Train Time | Inference Latency |
 | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
@@ -123,11 +168,11 @@ All metrics below are derived directly from [`artifacts/model_metrics.json`](./a
 
 ### Per-Class Test Performance (Random Forest)
 
-| Survey Class | Support | Recall (Sensitivity) | Precision | F1-Score | ROC-AUC (OvR) | PR-AUC |
-| :--- | :---: | :---: | :---: | :---: | :---: | :---: |
-| **No Reported Diabetes** | 8,412 | 72.68% | 94.10% | 0.8202 | 0.8208 | 0.9588 |
-| **Pre-diabetic** | 184 | **4.89%** | **2.36%** | **0.0319** | 0.6386 | 0.0281 |
-| **Diabetic** | 1,404 | **73.72%** | **33.15%** | **0.4574** | 0.8276 | 0.4209 |
+| Survey Class | Support | Recall (Sensitivity) | Precision | F1-Score | ROC-AUC (OvR) | Average Precision (PR-AUC) | Prevalence Baseline |
+| :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
+| **No Reported Diabetes** | 8,412 | 72.68% | 94.10% | 0.8202 | 0.8208 | 0.9588 | 84.12% |
+| **Pre-diabetic** | 184 | **4.89%** | **2.36%** | **0.0319** | 0.6386 | 0.0281 | 1.84% |
+| **Diabetic** | 1,404 | **73.72%** | **33.15%** | **0.4574** | 0.8276 | 0.4209 | 14.04% |
 
 ### Hold-Out Confusion Matrix (N = 10,000)
 
@@ -143,26 +188,25 @@ Total Predicted                                   6,497                       38
 
 ## Project Structure & Deliverables
 
-| Deliverable File | Description & Link |
+| File | Description & Link |
 | :--- | :--- |
-| [`ingest_brfss.py`](./ingest_brfss.py) | Dual-path ETL script: validates bundled cohort (Path A) or ingests raw CDC BRFSS dataset (Path B). |
-| [`ml_pipeline.py`](./ml_pipeline.py) | Training pipeline with feature name propagation, 5-fold CV, baseline comparison, and calibration assessment. |
-| [`clinical_transformers.py`](./clinical_transformers.py) | Standalone schemas and `PhysiologicalOutlierCapper` with explicit `get_feature_names_out()`. |
-| [`api.py`](./api.py) | FastAPI service with exact transformed feature mapping, structured 422 error handlers, and threadpool execution. |
-| [`DiabetesDashboard.jsx`](./DiabetesDashboard.jsx) | React 18 UI with stale state tracking, field-level validation, and honest benchmark metrics display. |
-| [`tests/test_pipeline_and_api.py`](./tests/test_pipeline_and_api.py) | Comprehensive 13-test automated regression suite including controlled SHAP feature identity check. |
-| [`MODEL_CARD.md`](./MODEL_CARD.md) | Standardized Model Card detailing task, cohort, evaluation, and technical limitations. |
-| [`requirements.txt`](./requirements.txt) | Pinned Python 3.13 dependency manifest. |
-| [`artifacts/model_metrics.json`](./artifacts/model_metrics.json) | Ground-truth test evaluation metrics and confusion matrix artifact. |
-| [`artifacts/metadata.json`](./artifacts/metadata.json) | Pipeline metadata, hyperparameters, and feature schemas. |
+| [`ingest_brfss.py`](./ingest_brfss.py) | Ingestion CLI supporting `--samples all` or integer, discrete domain validation, and exclusion telemetry. |
+| [`ml_pipeline.py`](./ml_pipeline.py) | Training pipeline with BMI-only outlier capping, fold-local calibration, decision rules, and monotonic timing. |
+| [`clinical_transformers.py`](./clinical_transformers.py) | Domain definitions (`DISCRETE_ALLOWED_VALUES`), discrete validator, and `PhysiologicalOutlierCapper`. |
+| [`scripts/run_experiments.py`](./scripts/run_experiments.py) | Reproducible runner executing all 7 empirical investigations and saving JSON artifacts. |
+| [`scripts/preserve_baseline_manifest.py`](./scripts/preserve_baseline_manifest.py) | Creates cryptographic baseline manifest linking metrics, dataset hashes, and code versions. |
+| [`artifacts/experiments/`](./artifacts/experiments/) | Complete experiment directory containing learning curves, ablation, calibration, and benchmark JSONs. |
+| [`api.py`](./api.py) | FastAPI service with exact feature order, decision rule support, artifact compatibility checks, and `/experiments`. |
+| [`DiabetesDashboard.jsx`](./DiabetesDashboard.jsx) | React 18 UI with decision rule toggle, accurate probability terminology, and Empirical Investigations tab. |
+| [`tests/test_pipeline_and_api.py`](./tests/test_pipeline_and_api.py) | 13 integration and regression tests for ingestion, pipeline, and API endpoints. |
+| [`tests/test_modeling_improvements.py`](./tests/test_modeling_improvements.py) | 8 targeted regression tests covering discrete domains, loading modes, calibration, rules, and compatibility. |
+| [`MODEL_CARD.md`](./MODEL_CARD.md) | Standardized Model Card with full experimental findings, data lineage, and limitations. |
 
 ---
 
 ## Quickstart & Reproducibility Guide
 
 ### 1. Clean Environment Setup
-This project is tested with **Python 3.13.3** and **Node.js 18+**.
-
 ```bash
 # Clone repository
 git clone git@github.com:Siddharth18-coder/ML-Lab-Project.git
@@ -181,31 +225,35 @@ pip install -r requirements.txt
 
 #### Path A: Train from Bundled Cleaned Cohort
 ```bash
-# Validate bundled cohort (artifacts/cdc_brfss_diabetes_clean.csv)
+# Validate bundled cohort format
 python ingest_brfss.py --validate-only
 
-# Train model, compute CV and baselines, serialize artifacts
+# Train model on bundled 50k cohort
 python ml_pipeline.py --samples 50000 --seed 42 --model rf
 ```
 
-#### Path B: Ingest Raw CDC BRFSS Dataset
+#### Path B: Ingest Raw CDC BRFSS Dataset & Train Full Data
 ```bash
-# Obtain raw 2015 CDC BRFSS CSV (e.g. from CDC.gov or Kaggle) into archive/2015.csv
-python ingest_brfss.py --raw-file archive/2015.csv --samples 50000 --seed 42
+# Clean raw CDC BRFSS 2015 CSV and extract all 251,117 eligible records
+python ingest_brfss.py --data-mode raw --raw-path archive/2015.csv --samples all --seed 42
 
-# Train model
-python ml_pipeline.py --samples 50000 --seed 42 --model rf
+# Train model on full available eligible cohort
+python ml_pipeline.py --data-mode cleaned --clean-path artifacts/cdc_brfss_diabetes_clean_full.csv --samples all --seed 42 --model rf
+```
+
+#### Path C: Reproduce All Empirical Bottleneck Experiments
+```bash
+# Executes learning curves, preprocessing ablation, model search, calibration, and runtime benchmarks
+python scripts/run_experiments.py
 ```
 
 ### 3. Run Automated Tests
-
-Execute the 13-test regression suite:
 ```bash
+# Run all 21 automated regression tests
 pytest tests/ -v
 ```
 
 ### 4. Launch the Backend API
-
 ```bash
 # Start FastAPI service on 127.0.0.1:8000
 python -m uvicorn api:app --host 127.0.0.1 --port 8000
@@ -213,7 +261,6 @@ python -m uvicorn api:app --host 127.0.0.1 --port 8000
 OpenAPI documentation available at `http://127.0.0.1:8000/docs`.
 
 ### 5. Launch the Frontend
-
 ```bash
 # Install frontend dependencies
 npm install
@@ -254,6 +301,7 @@ curl -X POST "http://127.0.0.1:8000/predict" \
     "sex": 1,
     "age": 9,
     "education": 4,
-    "income": 5
+    "income": 5,
+    "decision_rule": "threshold_tuned"
   }'
 ```

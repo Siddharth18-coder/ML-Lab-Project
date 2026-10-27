@@ -1,36 +1,25 @@
 """
-clinical_transformers.py - Standalone Clinical Feature Transformers
-====================================================================
-Isolated transformer definitions to guarantee clean, portable serialization
-and unpickling across training scripts, background workers, and REST APIs.
-
-Design Decisions:
-1. Physiological bounds mirror clinical limits in api.py and frontend forms.
-2. Empirical percentiles are computed strictly on the training partition
-   (1st and 99th percentiles) to prevent test-set data leakage.
+clinical_transformers.py - Clinical Feature Schemas & Dedicated Transformers
+=============================================================================
+Centralized feature schemas, discrete allowed value constraints, and standalone
+transformers to guarantee clean, portable serialization across training, APIs,
+and evaluation suites.
 """
 
-from typing import Dict, Tuple, Optional
+from typing import Dict, Tuple, Optional, Set, Any
 import numpy as np
 import pandas as pd
 from sklearn.base import BaseEstimator, TransformerMixin
 
 # Default clinical physiological limits (aligned with API & frontend validators)
 PHYSIOLOGICAL_BOUNDS: Dict[str, Tuple[float, float]] = {
-    "age": (18.0, 100.0),
+    "age": (1.0, 13.0),
     "bmi": (12.0, 70.0),
-    "fasting_blood_glucose": (40.0, 450.0),
-    "hba1c": (3.5, 18.0),
-    "total_cholesterol": (80.0, 450.0),
-    "hdl_cholesterol": (15.0, 140.0),
-    "ldl_cholesterol": (30.0, 320.0),
-    "triglycerides": (30.0, 750.0),
-    "systolic_bp": (60.0, 260.0),
-    "diastolic_bp": (40.0, 160.0),
-    "serum_creatinine": (0.2, 8.0),
-    "physical_activity_minutes_per_week": (0.0, 1200.0),
-    "diet_quality_score": (1.0, 10.0),
-    "sleep_hours": (2.0, 16.0),
+    "gen_hlth": (1.0, 5.0),
+    "ment_hlth": (0.0, 30.0),
+    "phys_hlth": (0.0, 30.0),
+    "education": (1.0, 6.0),
+    "income": (1.0, 8.0),
 }
 
 # CDC BRFSS Health Indicators reference bounds
@@ -60,7 +49,38 @@ BRFSS_FEATURE_BOUNDS: Dict[str, Tuple[float, float]] = {
 
 UNIFIED_BOUNDS: Dict[str, Tuple[float, float]] = {**PHYSIOLOGICAL_BOUNDS, **BRFSS_FEATURE_BOUNDS}
 
-# Centralized feature schemas to guarantee consistent mapping across ingestion, pipeline, and API
+# Discrete allowed sets for categorical, binary, and ordinal features
+DISCRETE_ALLOWED_VALUES: Dict[str, Set[int]] = {
+    "high_bp": {0, 1},
+    "high_chol": {0, 1},
+    "chol_check": {0, 1},
+    "smoker": {0, 1},
+    "stroke": {0, 1},
+    "heart_disease_or_attack": {0, 1},
+    "phys_activity": {0, 1},
+    "fruits": {0, 1},
+    "veggies": {0, 1},
+    "hvy_alcohol_consump": {0, 1},
+    "any_healthcare": {0, 1},
+    "no_doc_bc_cost": {0, 1},
+    "diff_walk": {0, 1},
+    "sex": {0, 1},
+    "gen_hlth": {1, 2, 3, 4, 5},
+    "age": {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13},
+    "education": {1, 2, 3, 4, 5, 6},
+    "income": {1, 2, 3, 4, 5, 6, 7, 8},
+}
+
+INTEGER_RANGE_FEATURES: Dict[str, Tuple[int, int]] = {
+    "ment_hlth": (0, 30),
+    "phys_hlth": (0, 30),
+}
+
+CONTINUOUS_FLOAT_FEATURES: Dict[str, Tuple[float, float]] = {
+    "bmi": (12.0, 70.0),
+}
+
+# Centralized feature schemas
 NUMERICAL_FEATURES = [
     "bmi",
     "gen_hlth",
@@ -88,7 +108,6 @@ BINARY_FEATURES = [
     "sex",
 ]
 
-# Raw survey indicator canonical order
 RAW_INPUT_FEATURES = [
     "high_bp", "high_chol", "chol_check", "bmi", "smoker",
     "stroke", "heart_disease_or_attack", "phys_activity", "fruits",
@@ -121,7 +140,6 @@ FEATURE_DISPLAY_NAMES: Dict[str, str] = {
     "income": "Household Income Bracket",
 }
 
-# Accurate epidemiological class names (avoiding claiming 'Healthy' proves general health)
 CLASS_DEFINITIONS: Dict[int, str] = {
     0: "No Reported Diabetes",
     1: "Pre-diabetic",
@@ -131,11 +149,86 @@ CLASS_DEFINITIONS: Dict[int, str] = {
 CLASS_NAMES = ["No Reported Diabetes", "Pre-diabetic", "Diabetic"]
 
 
+def validate_survey_feature_values(row_or_df: Any) -> Dict[str, Any]:
+    """
+    Validates features as discrete allowed values, integer day ranges, or bounded floats.
+    Catches invalid values, non-discrete entries, and out-of-range inputs.
+    """
+    if isinstance(row_or_df, dict):
+        records = [row_or_df]
+    elif isinstance(row_or_df, pd.DataFrame):
+        records = row_or_df.to_dict(orient="records")
+    else:
+        raise TypeError("Input must be a dict or pd.DataFrame")
+
+    violations = []
+    for i, rec in enumerate(records):
+        for feat, allowed_set in DISCRETE_ALLOWED_VALUES.items():
+            if feat in rec and rec[feat] is not None:
+                val = rec[feat]
+                try:
+                    int_val = int(val)
+                    if int_val != val or int_val not in allowed_set:
+                        violations.append({
+                            "record_index": i, "feature": feat, "value": val,
+                            "reason": f"Expected discrete value in {sorted(list(allowed_set))}, got {val}"
+                        })
+                except (ValueError, TypeError):
+                    violations.append({
+                        "record_index": i, "feature": feat, "value": val,
+                        "reason": f"Non-numeric or non-discrete value: {val}"
+                    })
+
+        for feat, (low, high) in INTEGER_RANGE_FEATURES.items():
+            if feat in rec and rec[feat] is not None:
+                val = rec[feat]
+                try:
+                    int_val = int(val)
+                    if int_val < low or int_val > high:
+                        violations.append({
+                            "record_index": i, "feature": feat, "value": val,
+                            "reason": f"Expected integer in [{low}, {high}], got {val}"
+                        })
+                except (ValueError, TypeError):
+                    violations.append({
+                        "record_index": i, "feature": feat, "value": val,
+                        "reason": f"Non-numeric integer-range value: {val}"
+                    })
+
+        for feat, (low, high) in CONTINUOUS_FLOAT_FEATURES.items():
+            if feat in rec and rec[feat] is not None:
+                val = rec[feat]
+                try:
+                    fval = float(val)
+                    if fval < low or fval > high:
+                        violations.append({
+                            "record_index": i, "feature": feat, "value": val,
+                            "reason": f"Expected continuous float in [{low}, {high}], got {val}"
+                        })
+                except (ValueError, TypeError):
+                    violations.append({
+                        "record_index": i, "feature": feat, "value": val,
+                        "reason": f"Non-numeric float value: {val}"
+                    })
+
+    if violations:
+        sample_violations = violations[:5]
+        raise ValueError(
+            f"Feature validation failed on {len(violations)} checks. Sample violations: {sample_violations}"
+        )
+
+    return {"status": "valid", "records_validated": len(records)}
+
+
 class PhysiologicalOutlierCapper(BaseEstimator, TransformerMixin):
     """
-    Caps numerical laboratory and survey values using strict clinical/survey
-    physiological reference limits combined with data-driven empirical percentiles
-    (1st and 99th percentiles calculated strictly on training split).
+    Caps survey and clinical values using strict physiological bounds and
+    optional data-driven empirical percentiles fitted strictly on training data.
+
+    Supports three ablation modes:
+    - 'none': No empirical quantile clipping (only physical reference limits).
+    - 'bmi_only': Empirical percentile clipping strictly on continuous BMI (leaving discrete/ordinal categories intact).
+    - 'all_numerical': Legacy behavior clipping all numerical features.
     """
 
     def __init__(
@@ -143,12 +236,14 @@ class PhysiologicalOutlierCapper(BaseEstimator, TransformerMixin):
         bounds: Optional[Dict[str, Tuple[float, float]]] = None,
         use_empirical_bounds: bool = True,
         lower_percentile: float = 0.01,
-        upper_percentile: float = 0.99
+        upper_percentile: float = 0.99,
+        capping_mode: str = "all_numerical"
     ):
         self.bounds = bounds or UNIFIED_BOUNDS
         self.use_empirical_bounds = use_empirical_bounds
         self.lower_percentile = lower_percentile
         self.upper_percentile = upper_percentile
+        self.capping_mode = capping_mode
         self.empirical_limits_: Dict[str, Tuple[float, float]] = {}
         self.feature_names_in_: Optional[np.ndarray] = None
 
@@ -158,18 +253,30 @@ class PhysiologicalOutlierCapper(BaseEstimator, TransformerMixin):
 
         self.feature_names_in_ = np.asarray(X.columns, dtype=object)
         self.empirical_limits_ = {}
+
         for col in X.columns:
             col_str = str(col)
             phys_min, phys_max = self.bounds.get(col_str, (-np.inf, np.inf))
+
+            apply_empirical = False
             if self.use_empirical_bounds:
+                if self.capping_mode == "all_numerical":
+                    apply_empirical = True
+                elif self.capping_mode == "bmi_only" and col_str == "bmi":
+                    apply_empirical = True
+                elif self.capping_mode == "none":
+                    apply_empirical = False
+
+            if apply_empirical:
                 q_low = X[col].quantile(self.lower_percentile)
                 q_high = X[col].quantile(self.upper_percentile)
-                # Keep capping within physiological bounds
                 col_min = max(phys_min, q_low) if not pd.isna(q_low) else phys_min
                 col_max = min(phys_max, q_high) if not pd.isna(q_high) else phys_max
             else:
                 col_min, col_max = phys_min, phys_max
+
             self.empirical_limits_[col_str] = (float(col_min), float(col_max))
+
         return self
 
     def transform(self, X):
@@ -185,15 +292,12 @@ class PhysiologicalOutlierCapper(BaseEstimator, TransformerMixin):
                     X_out[col] = X_out[col].clip(lower=low, upper=high)
                 else:
                     X_out[:, idx] = np.clip(X_out[:, idx], low, high)
+
         return X_out
 
     def get_feature_names_out(self, input_features=None) -> np.ndarray:
-        """Propagates feature names for Scikit-Learn ColumnTransformer compatibility."""
         if input_features is not None:
             return np.asarray(input_features, dtype=object)
         if self.feature_names_in_ is not None:
-            return np.asarray(self.feature_names_in_, dtype=object)
-        if self.empirical_limits_:
-            return np.asarray(list(self.empirical_limits_.keys()), dtype=object)
-        return np.asarray([], dtype=object)
-
+            return self.feature_names_in_
+        raise ValueError("Estimator capper is not fitted yet.")
