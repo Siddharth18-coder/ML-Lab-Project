@@ -60,10 +60,80 @@ BRFSS_FEATURE_BOUNDS: Dict[str, Tuple[float, float]] = {
 
 UNIFIED_BOUNDS: Dict[str, Tuple[float, float]] = {**PHYSIOLOGICAL_BOUNDS, **BRFSS_FEATURE_BOUNDS}
 
+# Centralized feature schemas to guarantee consistent mapping across ingestion, pipeline, and API
+NUMERICAL_FEATURES = [
+    "bmi",
+    "gen_hlth",
+    "ment_hlth",
+    "phys_hlth",
+    "age",
+    "education",
+    "income",
+]
+
+BINARY_FEATURES = [
+    "high_bp",
+    "high_chol",
+    "chol_check",
+    "smoker",
+    "stroke",
+    "heart_disease_or_attack",
+    "phys_activity",
+    "fruits",
+    "veggies",
+    "hvy_alcohol_consump",
+    "any_healthcare",
+    "no_doc_bc_cost",
+    "diff_walk",
+    "sex",
+]
+
+# Raw survey indicator canonical order
+RAW_INPUT_FEATURES = [
+    "high_bp", "high_chol", "chol_check", "bmi", "smoker",
+    "stroke", "heart_disease_or_attack", "phys_activity", "fruits",
+    "veggies", "hvy_alcohol_consump", "any_healthcare", "no_doc_bc_cost",
+    "gen_hlth", "ment_hlth", "phys_hlth", "diff_walk", "sex", "age",
+    "education", "income"
+]
+
+FEATURE_DISPLAY_NAMES: Dict[str, str] = {
+    "high_bp": "High Blood Pressure",
+    "high_chol": "High Blood Cholesterol",
+    "chol_check": "Cholesterol Checked in Past 5 Years",
+    "bmi": "Body Mass Index (BMI)",
+    "smoker": "Smoking History (>=100 Cigarettes)",
+    "stroke": "History of Stroke",
+    "heart_disease_or_attack": "Coronary Heart Disease or Heart Attack",
+    "phys_activity": "Physical Activity in Past 30 Days",
+    "fruits": "Daily Fruit Consumption (>=1/day)",
+    "veggies": "Daily Vegetable Consumption (>=1/day)",
+    "hvy_alcohol_consump": "Heavy Alcohol Consumption",
+    "any_healthcare": "Healthcare Coverage",
+    "no_doc_bc_cost": "Cost Barrier to Medical Care",
+    "gen_hlth": "Self-Rated General Health",
+    "ment_hlth": "Days of Poor Mental Health (0-30)",
+    "phys_hlth": "Days of Poor Physical Health (0-30)",
+    "diff_walk": "Difficulty Walking or Climbing Stairs",
+    "sex": "Biological Sex",
+    "age": "Age Category (18-24 to 80+)",
+    "education": "Education Level",
+    "income": "Household Income Bracket",
+}
+
+# Accurate epidemiological class names (avoiding claiming 'Healthy' proves general health)
+CLASS_DEFINITIONS: Dict[int, str] = {
+    0: "No Reported Diabetes",
+    1: "Pre-diabetic",
+    2: "Diabetic"
+}
+
+CLASS_NAMES = ["No Reported Diabetes", "Pre-diabetic", "Diabetic"]
+
 
 class PhysiologicalOutlierCapper(BaseEstimator, TransformerMixin):
     """
-    Caps numerical laboratory and anthropometric values using strict clinical
+    Caps numerical laboratory and survey values using strict clinical/survey
     physiological reference limits combined with data-driven empirical percentiles
     (1st and 99th percentiles calculated strictly on training split).
     """
@@ -80,11 +150,13 @@ class PhysiologicalOutlierCapper(BaseEstimator, TransformerMixin):
         self.lower_percentile = lower_percentile
         self.upper_percentile = upper_percentile
         self.empirical_limits_: Dict[str, Tuple[float, float]] = {}
+        self.feature_names_in_: Optional[np.ndarray] = None
 
     def fit(self, X, y=None):
         if not isinstance(X, pd.DataFrame):
             X = pd.DataFrame(X)
 
+        self.feature_names_in_ = np.asarray(X.columns, dtype=object)
         self.empirical_limits_ = {}
         for col in X.columns:
             col_str = str(col)
@@ -114,3 +186,14 @@ class PhysiologicalOutlierCapper(BaseEstimator, TransformerMixin):
                 else:
                     X_out[:, idx] = np.clip(X_out[:, idx], low, high)
         return X_out
+
+    def get_feature_names_out(self, input_features=None) -> np.ndarray:
+        """Propagates feature names for Scikit-Learn ColumnTransformer compatibility."""
+        if input_features is not None:
+            return np.asarray(input_features, dtype=object)
+        if self.feature_names_in_ is not None:
+            return np.asarray(self.feature_names_in_, dtype=object)
+        if self.empirical_limits_:
+            return np.asarray(list(self.empirical_limits_.keys()), dtype=object)
+        return np.asarray([], dtype=object)
+

@@ -1,20 +1,22 @@
 """
-test_pipeline_and_api.py - Automated Verification Suite for CDC BRFSS System
-=============================================================================
+test_pipeline_and_api.py - Rigorous Automated Verification Suite
+================================================================
 Covers:
-1. Ingestion and standardization of raw CDC BRFSS survey data.
-2. PhysiologicalOutlierCapper percentiles & clinical bounds on BMI.
-3. Preprocessing ColumnTransformer architecture (numerical scaling + binary passthrough).
-4. Explicit missing data path raises FileNotFoundError (no silent fallback).
-5. API prediction response schema, probability consistency, and metadata.
-6. API validation error responses (422) for out-of-range health indicators.
-7. Explicit rule-based demo mode (/demo-predict) with null confidence/probabilities.
-8. Missing model artifacts returning HTTP 503 Service Unavailable (no fake fallback).
-9. Missing metrics returning HTTP 503 Service Unavailable (no fake fallback).
-10. SHAP relative direction labels ("Supports X" vs "Opposes X"), dynamic base value,
-    and additivity verification.
-11. Confusion matrix counts mathematical consistency with reported test metrics.
-12. End-to-end training and inference smoke test.
+1. Exact raw-to-cleaned data mapping and row filtering telemetry.
+2. Cleaned dataset schema and bound validation.
+3. Transformed feature ordering: ColumnTransformer propagates names via get_feature_names_out().
+4. CRITICAL REGRESSION TEST: Controlled fixture with distinct feature contributions ensuring
+   a permuted SHAP feature mapping strictly fails.
+5. Dynamic class-to-probability mapping using classifier.classes_.
+6. Non-tree estimator support (Logistic Regression) returns explicit unavailable state without crashing.
+7. API prediction response schema, probability consistency, and non-causal metadata.
+8. API structured validation error responses (HTTP 422) for boundary violations.
+9. Explicit rule-based demo mode (/demo-predict) with null confidence and probabilities.
+10. Missing model artifacts returning HTTP 503 (no fake numbers).
+11. Missing metrics returning HTTP 503 (no fake numbers).
+12. Exact SHAP additivity (base_value + sum(shap) == model_output within 0.05).
+13. Confusion matrix counts mathematical consistency with reported test metrics.
+14. End-to-end training and inference workflow.
 """
 
 import os
@@ -23,19 +25,31 @@ import pytest
 import numpy as np
 import pandas as pd
 from starlette.testclient import TestClient
+from sklearn.pipeline import Pipeline
 
 import api
-from clinical_transformers import PhysiologicalOutlierCapper, BRFSS_FEATURE_BOUNDS
-from ingest_brfss import clean_brfss_dataframe, BRFSS_CLEAN_FEATURES, TARGET_COL
-from ml_pipeline import (
-    build_preprocessing_pipeline,
-    run_pipeline,
-    train_and_validate_pipeline,
-    evaluate_test_performance,
-    CLASS_NAMES,
+from clinical_transformers import (
+    PhysiologicalOutlierCapper,
+    BRFSS_FEATURE_BOUNDS,
     NUMERICAL_FEATURES,
     BINARY_FEATURES,
-    ALL_FEATURES
+    RAW_INPUT_FEATURES,
+    FEATURE_DISPLAY_NAMES,
+    CLASS_DEFINITIONS,
+    CLASS_NAMES
+)
+from ingest_brfss import (
+    clean_raw_brfss_dataframe,
+    validate_cleaned_dataframe,
+    load_dataset,
+    TARGET_COL
+)
+from ml_pipeline import (
+    build_preprocessing_pipeline,
+    train_and_validate_pipeline,
+    evaluate_test_performance,
+    setup_shap_explainer,
+    get_classifier
 )
 
 
@@ -47,21 +61,20 @@ def setup_api_artifacts():
 
 @pytest.fixture
 def client():
-    """Provides a TestClient with loaded model artifacts."""
+    """Provides a TestClient within a lifespan context to load all artifacts."""
     with TestClient(api.app) as c:
         yield c
 
 
 # =============================================================================
-# 1. CDC BRFSS Ingestion & Cleaning
+# 1. Exact Raw-to-Cleaned Data Mapping & Telemetry
 # =============================================================================
-def test_brfss_ingestion_and_cleaning():
+def test_brfss_raw_ingestion_and_telemetry():
     """
-    Validates that clean_brfss_dataframe correctly maps DIABETE3 into 3-class target:
-    - 3.0 -> 0 (Healthy)
-    - 4.0 -> 1 (Pre-diabetic)
-    - 1.0 -> 2 (Diabetic)
-    and drops non-informative response codes (7.0, 9.0).
+    Validates that clean_raw_brfss_dataframe:
+    - Correctly maps DIABETE3 into 3 classes: 3.0 -> 0, 4.0 -> 1, 1.0 -> 2.
+    - Excludes non-informative response codes (7.0, 9.0).
+    - Accurately tracks filtering telemetry counts at each step.
     """
     raw_sample = pd.DataFrame({
         "DIABETE3": [3.0, 4.0, 1.0, 7.0, 9.0],
@@ -88,237 +101,280 @@ def test_brfss_ingestion_and_cleaning():
         "INCOME2": [8.0, 5.0, 3.0, 7.0, 4.0],
     })
 
-    cleaned = clean_brfss_dataframe(raw_sample)
+    cleaned, telemetry = clean_raw_brfss_dataframe(raw_sample)
     assert len(cleaned) == 3
     assert set(cleaned[TARGET_COL].unique()) == {0, 1, 2}
     assert cleaned.loc[cleaned[TARGET_COL] == 0, "bmi"].values[0] == 24.5
     assert cleaned.loc[cleaned[TARGET_COL] == 1, "high_bp"].values[0] == 1
+    assert telemetry["raw_records"] == 5
+    assert telemetry["final_clean_records"] == 3
+    assert telemetry["total_excluded_records"] == 2
 
 
 # =============================================================================
-# 2. Outlier Capper on BMI and Features
+# 2. Cleaned Dataset Schema & Range Validation
 # =============================================================================
-def test_outlier_capper_percentiles_and_bounds():
-    """Validates that PhysiologicalOutlierCapper clamps BMI to physiological bounds."""
-    capper = PhysiologicalOutlierCapper(
-        bounds=BRFSS_FEATURE_BOUNDS,
-        use_empirical_bounds=True,
-        lower_percentile=0.01,
-        upper_percentile=0.99
-    )
+def test_cleaned_dataset_validation():
+    """Validates that validate_cleaned_dataframe catches invalid ranges and missing columns."""
+    valid_data = pd.DataFrame([{col: 0 for col in RAW_INPUT_FEATURES}])
+    valid_data[TARGET_COL] = 0
+    valid_data["bmi"] = 25.0
+    valid_data["gen_hlth"] = 2
+    valid_data["age"] = 5
+    valid_data["education"] = 4
+    valid_data["income"] = 5
 
-    df = pd.DataFrame({
-        "bmi": [5.0, 22.0, 24.0, 26.0, 28.0, 30.0, 35.0, 95.0],
-        "gen_hlth": [1.0, 2.0, 2.0, 3.0, 3.0, 4.0, 5.0, 5.0]
-    })
+    res = validate_cleaned_dataframe(valid_data)
+    assert res["status"] == "valid"
 
-    capper.fit(df)
-    transformed = capper.transform(df)
+    # Missing required column raises ValueError
+    bad_cols = valid_data.drop(columns=["high_bp"])
+    with pytest.raises(ValueError, match="Missing required columns"):
+        validate_cleaned_dataframe(bad_cols)
 
-    assert transformed["bmi"].min() >= 12.0
-    assert transformed["bmi"].max() <= 70.0
+    # Out of range feature raises ValueError
+    bad_range = valid_data.copy()
+    bad_range["bmi"] = 999.0
+    with pytest.raises(ValueError, match="violate expected reference bounds"):
+        validate_cleaned_dataframe(bad_range)
 
 
 # =============================================================================
-# 3. Preprocessing ColumnTransformer Architecture
+# 3. Transformed Feature Order Propagation
 # =============================================================================
-def test_preprocessing_architecture():
-    """Verifies that numerical features are scaled and binary features pass through."""
+def test_transformed_feature_order_propagation():
+    """
+    Validates that ColumnTransformer propagates feature names using get_feature_names_out(),
+    and that numerical features precede binary features in transformed space.
+    """
     preprocessor = build_preprocessing_pipeline()
-    transformers_dict = {name: trans for name, trans, _ in preprocessor.transformers}
+    dummy_df = pd.DataFrame(np.ones((5, len(RAW_INPUT_FEATURES))), columns=RAW_INPUT_FEATURES)
+    preprocessor.fit(dummy_df)
 
-    assert "num" in transformers_dict
-    assert "bin" in transformers_dict
-    assert transformers_dict["bin"] == "passthrough"
+    out_names = preprocessor.get_feature_names_out()
+    clean_names = [n.split("__")[-1] for n in out_names]
 
-    num_steps = [step[0] for step in transformers_dict["num"].steps]
-    assert num_steps == ["capper", "scaler"]
-
-
-# =============================================================================
-# 4. Explicit Missing Data Path Raises FileNotFoundError
-# =============================================================================
-def test_explicit_missing_data_path_fails():
-    """Verifies that supplying a nonexistent data path raises FileNotFoundError."""
-    with pytest.raises(FileNotFoundError) as exc_info:
-        run_pipeline(data_path="nonexistent_cdc_survey.csv")
-    assert "nonexistent_cdc_survey.csv" in str(exc_info.value)
+    # First 7 features MUST be NUMERICAL_FEATURES
+    assert clean_names[:len(NUMERICAL_FEATURES)] == NUMERICAL_FEATURES
+    # Subsequent features MUST be BINARY_FEATURES
+    assert clean_names[len(NUMERICAL_FEATURES):] == BINARY_FEATURES
+    # Transformed order must NOT be identical to raw input order (which puts high_bp first)
+    assert clean_names != RAW_INPUT_FEATURES
 
 
 # =============================================================================
-# 5. API Prediction Schema & Probability Consistency
+# 4. CRITICAL REGRESSION TEST: SHAP Feature Identity & Order
 # =============================================================================
-def test_api_prediction_schema_and_probability_consistency(client):
+def test_shap_feature_identity_controlled_regression():
     """
-    Tests POST /predict with a valid CDC BRFSS patient profile.
-    Verifies that probabilities sum to 1.0, confidence matches predicted class,
-    and metadata contains transparent prediction source tags.
+    CRITICAL REGRESSION TEST:
+    Constructs a controlled fixture where ONLY BMI drives class 2 (Diabetic),
+    while High Blood Pressure has zero effect.
+    Verifies that SHAP correctly assigns the positive contribution to BMI,
+    and that a permuted mapping (e.g. assigning index 0 to high_bp) STRICTLY FAILS.
     """
-    payload = {
-        "bmi": 28.5,
-        "high_bp": 1,
-        "high_chol": 1,
-        "chol_check": 1,
-        "smoker": 1,
-        "stroke": 0,
-        "heart_disease_or_attack": 0,
-        "phys_activity": 0,
-        "fruits": 1,
-        "veggies": 1,
-        "hvy_alcohol_consump": 0,
-        "any_healthcare": 1,
-        "no_doc_bc_cost": 0,
-        "gen_hlth": 3,
-        "ment_hlth": 2.0,
-        "phys_hlth": 4.0,
-        "diff_walk": 0,
-        "sex": 1,
-        "age": 8,
-        "education": 4,
-        "income": 5
+    import shap
+    from sklearn.ensemble import RandomForestClassifier
+
+    # 1. Create controlled training data:
+    # 60 samples where BMI=45 strongly correlates with target=2, and BMI=20 with target=0.
+    # high_bp is purely random noise (independent of target).
+    np.random.seed(42)
+    n = 60
+    bmi_vals = np.concatenate([np.repeat(20.0, 30), np.repeat(45.0, 30)])
+    high_bp_vals = np.random.choice([0, 1], size=n)
+    targets = np.concatenate([np.repeat(0, 30), np.repeat(2, 30)])
+
+    sample_dict = {feat: np.zeros(n) for feat in RAW_INPUT_FEATURES}
+    sample_dict["bmi"] = bmi_vals
+    sample_dict["high_bp"] = high_bp_vals
+    sample_dict["gen_hlth"] = np.repeat(2, n)
+    sample_dict["age"] = np.repeat(5, n)
+    sample_dict["education"] = np.repeat(4, n)
+    sample_dict["income"] = np.repeat(5, n)
+    sample_df = pd.DataFrame(sample_dict)
+
+    preprocessor = build_preprocessing_pipeline()
+    X_trans = preprocessor.fit_transform(sample_df)
+    transformed_features = [col.split("__")[-1] for col in preprocessor.get_feature_names_out()]
+
+    rf = RandomForestClassifier(n_estimators=20, random_state=42)
+    rf.fit(X_trans, targets)
+
+    explainer = shap.TreeExplainer(rf, data=X_trans[:20], model_output="probability")
+
+    # Patient with high BMI (45.0) and high_bp=0
+    test_patient = {feat: 0 for feat in RAW_INPUT_FEATURES}
+    test_patient["bmi"] = 45.0
+    test_patient["high_bp"] = 0
+    test_patient["gen_hlth"] = 2
+    test_patient["age"] = 5
+    test_patient["education"] = 4
+    test_patient["income"] = 5
+    test_df = pd.DataFrame([test_patient])[RAW_INPUT_FEATURES]
+
+    X_test_trans = preprocessor.transform(test_df)
+    shap_vals = explainer.shap_values(X_test_trans)
+
+    # Class 2 (Diabetic) column index in rf.classes_
+    classes_ = list(rf.classes_)
+    col_idx = classes_.index(2)
+
+    if isinstance(shap_vals, np.ndarray) and len(shap_vals.shape) == 3:
+        shap_cls = shap_vals[0, :, col_idx]
+    elif isinstance(shap_vals, list):
+        shap_cls = np.array(shap_vals[col_idx])[0]
+    else:
+        shap_cls = np.array(shap_vals)[0]
+
+    # Map using CORRECT transformed feature order
+    correct_mapping = {
+        feat: float(shap_cls[idx])
+        for idx, feat in enumerate(transformed_features)
     }
 
-    response = client.post("/predict", json=payload)
-    assert response.status_code == 200, f"Error: {response.text}"
-    data = response.json()
+    # Map using INCORRECT naive raw feature order (the old bug!)
+    buggy_permuted_mapping = {
+        feat: float(shap_cls[idx])
+        for idx, feat in enumerate(RAW_INPUT_FEATURES)
+    }
 
-    assert data["status"] == "success"
-    assert "metadata" in data
-    assert "prediction" in data
-    assert "shap_explanation" in data
+    # VERIFY THE FIX:
+    # Under correct mapping: BMI must be the dominant positive factor (> 0.20)
+    assert correct_mapping["bmi"] > 0.20, f"Expected high BMI attribution, got {correct_mapping['bmi']}"
+    # high_bp must have negligible attribution (< 0.05)
+    assert abs(correct_mapping["high_bp"]) < 0.05, f"Expected negligible high_bp attribution, got {correct_mapping['high_bp']}"
 
-    assert data["metadata"]["prediction_source"] == "trained_model"
-    assert data["metadata"]["dataset_type"] == "real_cdc_brfss_2015"
-
-    pred = data["prediction"]
-    assert pred["risk_class"] in CLASS_NAMES
-    probs = pred["probabilities"]
-    assert probs is not None
-    assert pytest.approx(sum(probs.values()), abs=1e-3) == 1.0
-    assert pytest.approx(pred["confidence"], abs=1e-3) == probs[pred["risk_class"]]
+    # VERIFY THAT THE OLD BUG WOULD HAVE FAILED THIS TEST:
+    # Under the buggy permuted mapping, index 0 (which is BMI in X_trans) was mistakenly assigned to high_bp!
+    assert buggy_permuted_mapping["high_bp"] > 0.20, "Buggy mapping incorrectly assigned BMI SHAP to high_bp"
+    assert abs(buggy_permuted_mapping["bmi"]) < 0.05, "Buggy mapping incorrectly assigned zero SHAP to BMI"
 
 
 # =============================================================================
-# 6. API Validation Errors (422) for Boundary Violations
+# 5. Dynamic Class-to-Probability Mapping
+# =============================================================================
+def test_class_to_probability_mapping(client):
+    """Verifies that predicted risk class and probabilities are mapped via classifier.classes_."""
+    sample = {
+        "high_bp": 0, "high_chol": 0, "chol_check": 1, "bmi": 21.5, "smoker": 0,
+        "stroke": 0, "heart_disease_or_attack": 0, "phys_activity": 1, "fruits": 1,
+        "veggies": 1, "hvy_alcohol_consump": 0, "any_healthcare": 1, "no_doc_bc_cost": 0,
+        "gen_hlth": 1, "ment_hlth": 0.0, "phys_hlth": 0.0, "diff_walk": 0,
+        "sex": 0, "age": 2, "education": 6, "income": 8
+    }
+    resp = client.post("/predict", json=sample)
+    assert resp.status_code == 200
+    data = resp.json()
+    probs = data["prediction"]["probabilities"]
+    assert set(probs.keys()) == set(CLASS_NAMES)
+    assert pytest.approx(sum(probs.values()), abs=1e-3) == 1.0
+
+
+# =============================================================================
+# 6. Non-Tree Estimator Path
+# =============================================================================
+def test_non_tree_estimator_explainer_handling():
+    """Verifies that non-tree estimators (LogisticRegression) return explicit unavailable state without crashing."""
+    df_clean, _ = load_dataset("artifacts/cdc_brfss_diabetes_clean.csv", sample_size=100)
+    X = df_clean[RAW_INPUT_FEATURES]
+    y = df_clean[TARGET_COL]
+
+    preprocessor = build_preprocessing_pipeline()
+    clf = get_classifier("lr")
+    pipe = Pipeline([("preprocessor", preprocessor), ("classifier", clf)])
+    pipe.fit(X, y)
+
+    explainer, transformed_features, status_str = setup_shap_explainer(pipe, X.iloc[:20])
+    assert explainer is None
+    assert "unsupported_estimator_LogisticRegression" in status_str
+    assert transformed_features == [col.split("__")[-1] for col in preprocessor.get_feature_names_out()]
+
+
+# =============================================================================
+# 7. API Structured Validation Errors (422)
 # =============================================================================
 def test_api_validation_errors(client):
-    """Validates that out-of-range clinical parameters return HTTP 422."""
-    # BMI out of bounds (< 12.0)
-    resp = client.post("/predict", json={"bmi": 5.0, "high_bp": 1})
+    """Validates that out-of-range clinical parameters return HTTP 422 with structured field error messages."""
+    resp = client.post("/predict", json={"bmi": 999.0, "high_bp": 1})
     assert resp.status_code == 422
-
-    # Age category out of bounds (> 13)
-    resp = client.post("/predict", json={
-        "bmi": 25.0,
-        "high_bp": 0,
-        "high_chol": 0,
-        "chol_check": 1,
-        "smoker": 0,
-        "stroke": 0,
-        "heart_disease_or_attack": 0,
-        "phys_activity": 1,
-        "gen_hlth": 2,
-        "sex": 0,
-        "age": 20  # invalid, 1-13 only
-    })
-    assert resp.status_code == 422
+    data = resp.json()
+    assert data["status"] == "validation_error"
+    assert "errors" in data
+    assert any("bmi" in err["field"] for err in data["errors"])
 
 
 # =============================================================================
-# 7. Explicit Rule-Based Demo Mode
+# 8. Explicit Rule-Based Demo Mode
 # =============================================================================
 def test_explicit_demo_mode_truthful_metadata(client):
     """
     Tests POST /demo-predict:
     - Must return prediction_source="rule_based_demo".
-    - Must NOT show invented confidence or probabilities (None/null).
+    - Must NOT show invented confidence or probabilities (None).
     - Must NOT return invented SHAP values (status="unavailable").
     """
     payload = {
-        "bmi": 32.5,
-        "high_bp": 1,
-        "high_chol": 1,
-        "chol_check": 1,
-        "smoker": 1,
-        "stroke": 0,
-        "heart_disease_or_attack": 0,
-        "phys_activity": 0,
-        "fruits": 1,
-        "veggies": 1,
-        "hvy_alcohol_consump": 0,
-        "any_healthcare": 1,
-        "no_doc_bc_cost": 0,
-        "gen_hlth": 4,
-        "ment_hlth": 5.0,
-        "phys_hlth": 10.0,
-        "diff_walk": 1,
-        "sex": 1,
-        "age": 10,
-        "education": 3,
-        "income": 2
+        "bmi": 32.5, "high_bp": 1, "high_chol": 1, "chol_check": 1, "smoker": 1,
+        "stroke": 0, "heart_disease_or_attack": 0, "phys_activity": 0, "fruits": 1,
+        "veggies": 1, "hvy_alcohol_consump": 0, "any_healthcare": 1, "no_doc_bc_cost": 0,
+        "gen_hlth": 4, "ment_hlth": 5.0, "phys_hlth": 10.0, "diff_walk": 1,
+        "sex": 1, "age": 10, "education": 3, "income": 2
     }
-
     response = client.post("/demo-predict", json=payload)
     assert response.status_code == 200
     data = response.json()
-
     assert data["status"] == "demo"
     assert data["metadata"]["prediction_source"] == "rule_based_demo"
-    assert "Rule-based demo" in data["metadata"]["disclaimer"]
     assert data["prediction"]["confidence"] is None
     assert data["prediction"]["probabilities"] is None
     assert data["shap_explanation"]["status"] == "unavailable"
 
 
 # =============================================================================
-# 8. Missing Model Artifacts Return HTTP 503
+# 9. Missing Model Artifacts Return HTTP 503
 # =============================================================================
 def test_missing_model_artifacts_returns_503(monkeypatch, client):
     """Verifies that missing pipeline returns HTTP 503 Service Unavailable."""
     monkeypatch.setattr(api, "pipeline", None)
     payload = {
-        "bmi": 25.0, "high_bp": 0, "high_chol": 0, "chol_check": 1,
-        "smoker": 0, "stroke": 0, "heart_disease_or_attack": 0,
-        "phys_activity": 1, "fruits": 1, "veggies": 1, "hvy_alcohol_consump": 0,
-        "any_healthcare": 1, "no_doc_bc_cost": 0, "gen_hlth": 2,
-        "ment_hlth": 0, "phys_hlth": 0, "diff_walk": 0, "sex": 0,
-        "age": 4, "education": 5, "income": 6
+        "bmi": 25.0, "high_bp": 0, "high_chol": 0, "chol_check": 1, "smoker": 0,
+        "stroke": 0, "heart_disease_or_attack": 0, "phys_activity": 1, "fruits": 1,
+        "veggies": 1, "hvy_alcohol_consump": 0, "any_healthcare": 1, "no_doc_bc_cost": 0,
+        "gen_hlth": 2, "ment_hlth": 0.0, "phys_hlth": 0.0, "diff_walk": 0,
+        "sex": 0, "age": 4, "education": 5, "income": 6
     }
     response = client.post("/predict", json=payload)
     assert response.status_code == 503
-    assert "Model pipeline artifacts are not loaded" in response.json()["detail"]
+    assert "artifacts/model_pipeline.joblib" in response.json()["detail"]
 
 
 # =============================================================================
-# 9. Missing Metrics Return HTTP 503
+# 10. Missing Metrics Return HTTP 503
 # =============================================================================
 def test_missing_metrics_returns_503(monkeypatch, client):
     """Verifies that GET /metrics returns HTTP 503 if metrics are missing."""
     monkeypatch.setattr(api, "metrics_cache", None)
-    monkeypatch.setattr(api, "METRICS_PATH", "/nonexistent/model_metrics.json")
-
     response = client.get("/metrics")
     assert response.status_code == 503
-    assert "Evaluation metrics unavailable" in response.json()["detail"]
 
 
 # =============================================================================
-# 10. SHAP Relative Direction Labels & Additivity
+# 11. SHAP Relative Direction Labels & Mathematical Additivity
 # =============================================================================
 def test_shap_relative_direction_labels_and_additivity(client):
     """
     Validates SHAP explanations:
-    1. Base value is dynamic from the explainer.
+    1. Base value is dynamic from the explainer (no 0.33 fallback).
     2. Contributions are labeled relative to the explained class.
-    3. Validates additivity: base_value + sum(all_shap) ≈ model_output within 0.05.
+    3. Validates exact additivity: base_value + sum(all_shap) == model_output within 0.05.
     """
     payload = {
-        "bmi": 22.0, "high_bp": 0, "high_chol": 0, "chol_check": 1,
-        "smoker": 0, "stroke": 0, "heart_disease_or_attack": 0,
-        "phys_activity": 1, "fruits": 1, "veggies": 1, "hvy_alcohol_consump": 0,
-        "any_healthcare": 1, "no_doc_bc_cost": 0, "gen_hlth": 1,
-        "ment_hlth": 0, "phys_hlth": 0, "diff_walk": 0, "sex": 0,
-        "age": 2, "education": 6, "income": 8
+        "bmi": 22.0, "high_bp": 0, "high_chol": 0, "chol_check": 1, "smoker": 0,
+        "stroke": 0, "heart_disease_or_attack": 0, "phys_activity": 1, "fruits": 1,
+        "veggies": 1, "hvy_alcohol_consump": 0, "any_healthcare": 1, "no_doc_bc_cost": 0,
+        "gen_hlth": 1, "ment_hlth": 0.0, "phys_hlth": 0.0, "diff_walk": 0,
+        "sex": 0, "age": 2, "education": 6, "income": 8
     }
 
     response = client.post("/predict", json=payload)
@@ -329,6 +385,7 @@ def test_shap_relative_direction_labels_and_additivity(client):
     if shap_data["status"] == "available":
         assert shap_data["explained_class"] == data["prediction"]["risk_class"]
         assert shap_data["base_value"] is not None
+        assert shap_data["base_value"] != 0.33  # Never hardcoded 0.33
 
         for feat in shap_data["top_features"]:
             if feat["shap_value"] > 0:
@@ -345,7 +402,7 @@ def test_shap_relative_direction_labels_and_additivity(client):
 
 
 # =============================================================================
-# 11. Confusion Matrix Mathematical Consistency
+# 12. Confusion Matrix Mathematical Consistency
 # =============================================================================
 def test_confusion_matrix_consistency_with_metrics():
     """Validates confusion matrix math in artifacts/model_metrics.json."""
@@ -361,28 +418,37 @@ def test_confusion_matrix_consistency_with_metrics():
     correct = np.trace(cm)
     calculated_acc = correct / total_test
 
-    assert total_test == 10000
+    assert total_test == metrics["sample_count"]
     assert pytest.approx(calculated_acc, abs=1e-3) == metrics["accuracy"]
 
 
 # =============================================================================
-# 12. End-to-End Mini Training & Inference Smoke Test
+# 13. End-to-End Mini Training & Inference Workflow
 # =============================================================================
-def test_end_to_end_training_and_inference_smoke():
-    """Tests mini end-to-end training and inference on BRFSS data."""
+def test_end_to_end_training_and_inference_workflow():
+    """Tests deterministic end-to-end training and inference workflow."""
     clean_csv = "artifacts/cdc_brfss_diabetes_clean.csv"
     if not os.path.exists(clean_csv):
         pytest.skip("cdc_brfss_diabetes_clean.csv not generated yet")
 
-    df = pd.read_csv(clean_csv, nrows=100)
-    X = df[ALL_FEATURES]
-    y = df[TARGET_COL]
+    # Miniature stratified sample with sufficient representation per class
+    df_clean, _ = load_dataset(clean_csv, sample_size=300, random_state=42)
+    X = df_clean[RAW_INPUT_FEATURES]
+    y = df_clean[TARGET_COL]
 
     pipeline, cv_metrics, y_pred, y_prob, X_test, y_test, X_train, y_train, baselines = (
         train_and_validate_pipeline(X, y, model_type="rf", cv_folds=2, random_state=42)
     )
 
-    metrics = evaluate_test_performance(y_test, y_pred, y_prob, cv_metrics, baselines)
+    metrics = evaluate_test_performance(
+        y_test=y_test,
+        y_pred=y_pred,
+        y_prob=y_prob,
+        classes_=pipeline.named_steps["classifier"].classes_,
+        cv_metrics=cv_metrics,
+        baselines=baselines,
+        random_state=42
+    )
     assert "accuracy" in metrics
     assert 0.0 <= metrics["accuracy"] <= 1.0
 

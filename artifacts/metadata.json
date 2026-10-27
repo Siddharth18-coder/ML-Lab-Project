@@ -1,12 +1,88 @@
 {
-  "model_version": "2.0.0-brfss",
+  "model_version": "2.1.0-brfss",
   "estimator": "RandomForestClassifier",
   "dataset_name": "CDC Behavioral Risk Factor Surveillance System (BRFSS) 2015",
-  "dataset_type": "real_cdc_brfss_2015",
-  "provenance": "Centers for Disease Control and Prevention (CDC), Public Domain",
+  "dataset_provenance": "Centers for Disease Control and Prevention (CDC), Public Domain",
+  "dataset_metadata": {
+    "source_path": "/Users/siddharthbhargava/Documents/ML-Lab Project/artifacts/cdc_brfss_diabetes_clean.csv",
+    "source_filename": "cdc_brfss_diabetes_clean.csv",
+    "sha256_checksum": "c126b1a9c970d6a4702fe348f4e4b8618d1e461ec5f491f94a83a92a4264131b",
+    "is_raw_source": false,
+    "validation": {
+      "status": "valid",
+      "sample_count": 50000,
+      "feature_count": 21,
+      "target_distribution": {
+        "No Reported Diabetes": 42058,
+        "Diabetic": 7022,
+        "Pre-diabetic": 920
+      },
+      "features": [
+        "high_bp",
+        "high_chol",
+        "chol_check",
+        "bmi",
+        "smoker",
+        "stroke",
+        "heart_disease_or_attack",
+        "phys_activity",
+        "fruits",
+        "veggies",
+        "hvy_alcohol_consump",
+        "any_healthcare",
+        "no_doc_bc_cost",
+        "gen_hlth",
+        "ment_hlth",
+        "phys_hlth",
+        "diff_walk",
+        "sex",
+        "age",
+        "education",
+        "income"
+      ]
+    },
+    "subsampled": false,
+    "sample_size": 50000,
+    "final_record_count": 50000,
+    "class_distribution": {
+      "No Reported Diabetes": 42058,
+      "Diabetic": 7022,
+      "Pre-diabetic": 920
+    }
+  },
   "n_samples_total": 50000,
-  "n_features": 21,
-  "features": [
+  "n_features_raw": 21,
+  "raw_features_canonical_order": [
+    "high_bp",
+    "high_chol",
+    "chol_check",
+    "bmi",
+    "smoker",
+    "stroke",
+    "heart_disease_or_attack",
+    "phys_activity",
+    "fruits",
+    "veggies",
+    "hvy_alcohol_consump",
+    "any_healthcare",
+    "no_doc_bc_cost",
+    "gen_hlth",
+    "ment_hlth",
+    "phys_hlth",
+    "diff_walk",
+    "sex",
+    "age",
+    "education",
+    "income"
+  ],
+  "transformed_features_order": [
+    "bmi",
+    "gen_hlth",
+    "ment_hlth",
+    "phys_hlth",
+    "age",
+    "education",
+    "income",
     "high_bp",
     "high_chol",
     "chol_check",
@@ -20,7 +96,9 @@
     "any_healthcare",
     "no_doc_bc_cost",
     "diff_walk",
-    "sex",
+    "sex"
+  ],
+  "numerical_features": [
     "bmi",
     "gen_hlth",
     "ment_hlth",
@@ -28,6 +106,22 @@
     "age",
     "education",
     "income"
+  ],
+  "binary_features": [
+    "high_bp",
+    "high_chol",
+    "chol_check",
+    "smoker",
+    "stroke",
+    "heart_disease_or_attack",
+    "phys_activity",
+    "fruits",
+    "veggies",
+    "hvy_alcohol_consump",
+    "any_healthcare",
+    "no_doc_bc_cost",
+    "diff_walk",
+    "sex"
   ],
   "feature_display_names": {
     "high_bp": "High Blood Pressure",
@@ -53,10 +147,17 @@
     "income": "Household Income Bracket"
   },
   "classes": [
-    "Healthy",
+    "No Reported Diabetes",
     "Pre-diabetic",
     "Diabetic"
   ],
+  "class_ids": [
+    0,
+    1,
+    2
+  ],
+  "explainer_status": "available",
+  "explainer_type": "TreeExplainer",
   "cv_folds": 5,
   "random_state": 42
 }

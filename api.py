@@ -1,41 +1,59 @@
 """
-api.py - CDC BRFSS Diabetes Risk Machine Learning REST API
-============================================================
+api.py - CDC BRFSS Diabetes Risk Stratification & Explainability REST API
+==========================================================================
 Data Provenance & Scope:
-This API delivers multi-class diabetes risk classification (Healthy, Pre-diabetic, Diabetic)
+Delivers multi-class diabetes risk classification (No Reported Diabetes, Pre-diabetic, Diabetic)
 trained directly on the real-world U.S. Centers for Disease Control and Prevention (CDC)
-Behavioral Risk Factor Surveillance System (BRFSS) dataset (250,000+ surveyed individuals).
+Behavioral Risk Factor Surveillance System (BRFSS) dataset (50,000 surveyed cohort).
 
 Key Architectural Guarantees:
-1. Strict Pydantic v2 validation adhering to CDC BRFSS health indicator codes and ranges.
+1. Strict Pydantic v2 validation adhering to CDC BRFSS health indicator codes and bounds.
 2. Verified TreeSHAP explainability:
-   - Base value dynamically extracted from explainer for predicted class.
+   - Features mapped using exact transformed order from ColumnTransformer.get_feature_names_out().
+   - Classes mapped dynamically using classifier.classes_.
+   - Base value dynamically extracted from explainer for the predicted class (no fabricated fallbacks).
    - Attributions labeled relative to the explained class ('Supports X' vs 'Opposes X').
-   - Additivity check: base_value + sum(shap_values) ≈ model probability output.
+   - Additivity check: base_value + sum(shap_values) == model probability output (tol=0.05).
+   - Associations framed scientifically without making unsupported causal medical claims.
 3. Explicit Demo Mode:
    - POST /predict: strictly evaluates trained real-world ML model pipeline.
    - POST /demo-predict: rule-based epidemiological demo returning confidence=None, probabilities=None.
 4. Truthful operational status:
-   - If model artifacts are missing, returns HTTP 503 (no fake simulated numbers).
+   - If model artifacts are missing or corrupt, returns HTTP 503.
+   - Structured field-level error messages on validation failure (HTTP 422).
+   - Non-blocking async inference via threadpool execution.
 """
 
 import os
 import json
 import logging
+from contextlib import asynccontextmanager
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Dict, List, Any, Optional, Literal
 
 import numpy as np
 import pandas as pd
 import joblib
 
-from clinical_transformers import PhysiologicalOutlierCapper, BRFSS_FEATURE_BOUNDS
-from fastapi import FastAPI, HTTPException, status
+from fastapi import FastAPI, HTTPException, status, Request
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field
 
+from clinical_transformers import (
+    RAW_INPUT_FEATURES,
+    FEATURE_DISPLAY_NAMES,
+    CLASS_DEFINITIONS,
+    CLASS_NAMES,
+    BRFSS_FEATURE_BOUNDS,
+    PhysiologicalOutlierCapper
+)
+
 # -----------------------------------------------------------------------------
-# Logging and Initialization
+# Logging and Path Setup
 # -----------------------------------------------------------------------------
 logging.basicConfig(
     level=logging.INFO,
@@ -44,35 +62,12 @@ logging.basicConfig(
 )
 logger = logging.getLogger("DiabetesAPI")
 
-app = FastAPI(
-    title="CDC BRFSS Diabetes Risk Intelligence API",
-    description=(
-        "Public health decision support service for multi-class diabetes risk "
-        "classification and SHAP explainability trained on real CDC BRFSS epidemiological data."
-    ),
-    version="2.0.0",
-)
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-# -----------------------------------------------------------------------------
-# Artifact Locations and Model Loading
-# -----------------------------------------------------------------------------
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-ARTIFACTS_DIR = os.path.join(BASE_DIR, "artifacts")
-PIPELINE_PATH = os.path.join(ARTIFACTS_DIR, "model_pipeline.joblib")
-EXPLAINER_PATH = os.path.join(ARTIFACTS_DIR, "explainer.joblib")
-METADATA_PATH = os.path.join(ARTIFACTS_DIR, "metadata.json")
-METRICS_PATH = os.path.join(ARTIFACTS_DIR, "model_metrics.json")
-
-CLASS_NAMES = ["Healthy", "Pre-diabetic", "Diabetic"]
-CLASS_MAP = {0: "Healthy", 1: "Pre-diabetic", 2: "Diabetic"}
+PROJECT_ROOT = Path(__file__).resolve().parent
+ARTIFACTS_DIR = PROJECT_ROOT / "artifacts"
+PIPELINE_PATH = ARTIFACTS_DIR / "model_pipeline.joblib"
+EXPLAINER_PATH = ARTIFACTS_DIR / "explainer.joblib"
+METADATA_PATH = ARTIFACTS_DIR / "metadata.json"
+METRICS_PATH = ARTIFACTS_DIR / "model_metrics.json"
 
 pipeline: Optional[Any] = None
 explainer: Optional[Any] = None
@@ -81,28 +76,34 @@ metrics_cache: Optional[Dict[str, Any]] = None
 
 
 def load_artifacts():
-    """Loads trained model pipeline, explainer, and metadata."""
+    """Loads and validates trained model pipeline, explainer, and metadata."""
     global pipeline, explainer, metadata, metrics_cache
     pipeline = None
     explainer = None
     metadata = None
     metrics_cache = None
 
-    if os.path.exists(PIPELINE_PATH):
+    if PIPELINE_PATH.exists():
         try:
-            pipeline = joblib.load(PIPELINE_PATH)
-            logger.info("Successfully loaded ML pipeline from %s", PIPELINE_PATH)
+            loaded_pipeline = joblib.load(PIPELINE_PATH)
+            # Compatibility sanity check
+            if hasattr(loaded_pipeline, "named_steps") and "preprocessor" in loaded_pipeline.named_steps:
+                pipeline = loaded_pipeline
+                logger.info("Successfully loaded ML pipeline from %s", PIPELINE_PATH)
+            else:
+                logger.error("Loaded artifact at %s is not a valid scikit-learn pipeline.", PIPELINE_PATH)
         except Exception as e:
             logger.error("Failed to load pipeline: %s", e)
 
-    if os.path.exists(EXPLAINER_PATH):
+    if EXPLAINER_PATH.exists():
         try:
-            explainer = joblib.load(EXPLAINER_PATH)
+            loaded_explainer = joblib.load(EXPLAINER_PATH)
+            explainer = loaded_explainer
             logger.info("Successfully loaded SHAP explainer from %s", EXPLAINER_PATH)
         except Exception as e:
             logger.warning("Could not load SHAP explainer: %s", e)
 
-    if os.path.exists(METADATA_PATH):
+    if METADATA_PATH.exists():
         try:
             with open(METADATA_PATH, "r", encoding="utf-8") as f:
                 metadata = json.load(f)
@@ -110,7 +111,7 @@ def load_artifacts():
         except Exception as e:
             logger.warning("Could not load metadata: %s", e)
 
-    if os.path.exists(METRICS_PATH):
+    if METRICS_PATH.exists():
         try:
             with open(METRICS_PATH, "r", encoding="utf-8") as f:
                 metrics_cache = json.load(f)
@@ -119,9 +120,56 @@ def load_artifacts():
             logger.warning("Could not load metrics: %s", e)
 
 
-@app.on_event("startup")
-async def startup_event():
+@asynccontextmanager
+async def lifespan(app: FastAPI):
     load_artifacts()
+    yield
+
+
+app = FastAPI(
+    title="CDC BRFSS Diabetes Risk Stratification API",
+    description=(
+        "Public health decision support service for multi-class diabetes risk "
+        "screening and SHAP explainability trained on real CDC BRFSS epidemiological data."
+    ),
+    version="2.1.0",
+    lifespan=lifespan
+)
+
+# CORS configuration supporting environment variable or local development
+allowed_origins_raw = os.getenv("CORS_ORIGINS", "http://localhost:3000,http://127.0.0.1:3000,http://localhost:5173,http://127.0.0.1:5173")
+allowed_origins = [o.strip() for o in allowed_origins_raw.split(",") if o.strip()]
+if "*" in allowed_origins or not allowed_origins:
+    allowed_origins = ["*"]
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=allowed_origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    """Provides structured, human-readable field-specific validation errors."""
+    error_list = []
+    for err in exc.errors():
+        field_path = " -> ".join(str(loc) for loc in err.get("loc", []) if loc != "body")
+        error_list.append({
+            "field": field_path,
+            "message": err.get("msg", "Validation failed"),
+            "type": err.get("type", "value_error")
+        })
+    return JSONResponse(
+        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+        content={
+            "status": "validation_error",
+            "message": "Input validation failed. Please check the supplied survey indicators.",
+            "errors": error_list
+        }
+    )
 
 
 # -----------------------------------------------------------------------------
@@ -220,7 +268,7 @@ class SHAPExplanation(BaseModel):
 
 class PredictionResult(BaseModel):
     class_id: int
-    risk_class: Literal["Healthy", "Pre-diabetic", "Diabetic"]
+    risk_class: Literal["No Reported Diabetes", "Pre-diabetic", "Diabetic"]
     confidence: Optional[float] = None
     probabilities: Optional[Dict[str, float]] = None
 
@@ -239,6 +287,7 @@ class ResponseMetadata(BaseModel):
     dataset_type: Optional[str] = None
     explanation_status: Literal["available", "unavailable", "not_applicable"]
     explanation_method: Optional[str] = None
+    probability_calibration: str = "uncalibrated_ensemble_vote"
     imputed_features: List[str] = []
     disclaimer: str
 
@@ -252,59 +301,23 @@ class PredictionResponse(BaseModel):
     timestamp: str
 
 
-# -----------------------------------------------------------------------------
-# Clinical Display Metadata and Insights
-# -----------------------------------------------------------------------------
-FEATURE_DISPLAY_NAMES = {
-    "high_bp": "High Blood Pressure",
-    "high_chol": "High Blood Cholesterol",
-    "chol_check": "Cholesterol Checked in Past 5 Years",
-    "bmi": "Body Mass Index (BMI)",
-    "smoker": "Smoking History (>=100 Cigarettes)",
-    "stroke": "History of Stroke",
-    "heart_disease_or_attack": "Coronary Heart Disease or Heart Attack",
-    "phys_activity": "Physical Activity in Past 30 Days",
-    "fruits": "Daily Fruit Consumption (>=1/day)",
-    "veggies": "Daily Vegetable Consumption (>=1/day)",
-    "hvy_alcohol_consump": "Heavy Alcohol Consumption",
-    "any_healthcare": "Healthcare Coverage",
-    "no_doc_bc_cost": "Cost Barrier to Medical Care",
-    "gen_hlth": "Self-Rated General Health",
-    "ment_hlth": "Days of Poor Mental Health (0-30)",
-    "phys_hlth": "Days of Poor Physical Health (0-30)",
-    "diff_walk": "Difficulty Walking or Climbing Stairs",
-    "sex": "Biological Sex",
-    "age": "Age Category (18-24 to 80+)",
-    "education": "Education Level",
-    "income": "Household Income Bracket",
-}
-
-ALL_FEATURE_KEYS = [
-    "high_bp", "high_chol", "chol_check", "bmi", "smoker",
-    "stroke", "heart_disease_or_attack", "phys_activity", "fruits",
-    "veggies", "hvy_alcohol_consump", "any_healthcare", "no_doc_bc_cost",
-    "gen_hlth", "ment_hlth", "phys_hlth", "diff_walk", "sex", "age",
-    "education", "income"
-]
-
-
 def generate_feature_clinical_insight(feature: str, value: Any, shap_val: float, explained_class: str) -> str:
-    """Generates class-relative clinical insights for CDC BRFSS indicators."""
+    """Generates class-relative non-causal statistical insight for CDC BRFSS indicators."""
     supports = shap_val > 0
-    verb = "supporting" if supports else "opposing"
+    verb = "supports" if supports else "opposes"
 
     if feature == "high_bp":
-        status_txt = "presence of diagnosed hypertension" if value == 1 else "normal blood pressure"
-        return f"Reported {status_txt}, {verb} {explained_class} classification."
+        status_txt = "presence of diagnosed hypertension" if value == 1 else "no reported hypertension"
+        return f"Reported {status_txt}; statistically {verb} the '{explained_class}' prediction."
     elif feature == "high_chol":
         status_txt = "diagnosed hypercholesterolemia" if value == 1 else "normal cholesterol history"
-        return f"Reported {status_txt}, {verb} {explained_class} classification."
+        return f"Reported {status_txt}; statistically {verb} the '{explained_class}' prediction."
     elif feature == "bmi":
-        return f"BMI of {value} kg/m², {verb} {explained_class} classification."
+        return f"BMI of {value} kg/m²; statistically {verb} the '{explained_class}' prediction."
     elif feature == "gen_hlth":
         ratings = {1: "Excellent", 2: "Very Good", 3: "Good", 4: "Fair", 5: "Poor"}
         r_txt = ratings.get(int(value), str(value))
-        return f"General health rated as {r_txt}, {verb} {explained_class} classification."
+        return f"General health self-rated as {r_txt}; statistically {verb} the '{explained_class}' prediction."
     elif feature == "age":
         age_ranges = {
             1: "18-24", 2: "25-29", 3: "30-34", 4: "35-39", 5: "40-44",
@@ -312,43 +325,43 @@ def generate_feature_clinical_insight(feature: str, value: Any, shap_val: float,
             11: "70-74", 12: "75-79", 13: "80+"
         }
         range_txt = age_ranges.get(int(value), f"bracket {value}")
-        return f"Patient in age bracket {range_txt}, {verb} {explained_class} classification."
+        return f"Individual in age bracket {range_txt}; statistically {verb} the '{explained_class}' prediction."
     elif feature == "phys_activity":
-        status_txt = "active in past 30 days" if value == 1 else "sedentary lifestyle"
-        return f"Reported {status_txt}, {verb} {explained_class} classification."
+        status_txt = "active in past 30 days" if value == 1 else "sedentary lifestyle (no past 30 days activity)"
+        return f"Reported {status_txt}; statistically {verb} the '{explained_class}' prediction."
     elif feature == "smoker":
-        status_txt = "history of smoking" if value == 1 else "non-smoker"
-        return f"Reported {status_txt}, {verb} {explained_class} classification."
+        status_txt = "history of smoking (>=100 cigarettes)" if value == 1 else "non-smoker"
+        return f"Reported {status_txt}; statistically {verb} the '{explained_class}' prediction."
     elif feature == "diff_walk":
-        status_txt = "mobility limitation (difficulty walking)" if value == 1 else "no mobility limitations"
-        return f"Reported {status_txt}, {verb} {explained_class} classification."
+        status_txt = "mobility limitation (difficulty walking/stairs)" if value == 1 else "no walking limitations"
+        return f"Reported {status_txt}; statistically {verb} the '{explained_class}' prediction."
     elif feature == "heart_disease_or_attack":
-        status_txt = "cardiovascular comorbidity (CHD/MI)" if value == 1 else "no cardiovascular disease"
-        return f"Reported {status_txt}, {verb} {explained_class} classification."
+        status_txt = "cardiovascular comorbidity (CHD/MI)" if value == 1 else "no cardiovascular comorbidity"
+        return f"Reported {status_txt}; statistically {verb} the '{explained_class}' prediction."
     elif feature == "stroke":
         status_txt = "history of stroke" if value == 1 else "no stroke history"
-        return f"Reported {status_txt}, {verb} {explained_class} classification."
+        return f"Reported {status_txt}; statistically {verb} the '{explained_class}' prediction."
     else:
         disp_name = FEATURE_DISPLAY_NAMES.get(feature, feature)
-        return f"{disp_name} of {value}, {verb} {explained_class} classification."
+        return f"{disp_name} value of {value}; statistically {verb} the '{explained_class}' prediction."
 
 
 def generate_clinical_recommendations(risk_class: str, patient: PatientData) -> List[ClinicalRecommendation]:
-    """Generates tailored recommendations based on CDC National Diabetes Prevention Program guidelines."""
+    """Generates tailored educational care pathways based on CDC National Diabetes Prevention Program guidelines."""
     recs = []
 
     if risk_class == "Diabetic":
         recs.append(ClinicalRecommendation(
             category="Medical Consultation",
-            title="Comprehensive Glycemic & Diabetic Clinical Evaluation",
-            description="Schedule a comprehensive clinical assessment including diagnostic HbA1c and fasting plasma glucose confirmation.",
+            title="Formal Diagnostic Evaluation & Glycemic Confirmation",
+            description="Consult a healthcare clinician for diagnostic venous laboratory testing (fasting plasma glucose >=126 mg/dL or venous HbA1c >=6.5%).",
             urgency="Immediate"
         ))
         if patient.high_bp == 1 or patient.high_chol == 1:
             recs.append(ClinicalRecommendation(
                 category="Clinical Monitoring",
-                title="Cardiovascular Risk Factor Management",
-                description="Manage concomitant hypertension and hyperlipidemia with target blood pressure <130/80 mmHg and statin therapy as clinically indicated.",
+                title="Concomitant Cardiovascular Risk Factor Surveillance",
+                description="Manage concomitant hypertension and hyperlipidemia with target blood pressure and lipid monitoring.",
                 urgency="Immediate"
             ))
 
@@ -356,13 +369,13 @@ def generate_clinical_recommendations(risk_class: str, patient: PatientData) -> 
         recs.append(ClinicalRecommendation(
             category="Physical Activity",
             title="CDC National Diabetes Prevention Program (DPP) Exercise Target",
-            description="Aim for at least 150-300 minutes per week of moderate-intensity aerobic physical activity combined with resistance training.",
+            description="Aim for at least 150 minutes per week of moderate-intensity aerobic physical activity (e.g. brisk walking) combined with resistance training.",
             urgency="Moderate"
         ))
         recs.append(ClinicalRecommendation(
             category="Nutrition & Diet",
-            title="Dietary Modification & 5-7% Weight Reduction Target",
-            description="Adopt a Mediterranean or DASH dietary pattern rich in dietary fiber, reducing refined carbohydrates and sugar-sweetened beverages.",
+            title="Dietary Modification & 5-7% Weight Reduction Goal",
+            description="Follow Mediterranean or DASH dietary patterns rich in dietary fiber, reducing refined carbohydrates and sugar-sweetened beverages.",
             urgency="Moderate"
         ))
 
@@ -375,7 +388,7 @@ def generate_clinical_recommendations(risk_class: str, patient: PatientData) -> 
         ))
         recs.append(ClinicalRecommendation(
             category="Clinical Monitoring",
-            title="Periodic Preventive Health Screening",
+            title="Periodic Preventive Health Checkups",
             description="Continue routine preventive health checkups every 1 to 2 years.",
             urgency="Routine"
         ))
@@ -384,139 +397,237 @@ def generate_clinical_recommendations(risk_class: str, patient: PatientData) -> 
 
 
 # -----------------------------------------------------------------------------
-# REST Endpoints
+# REST API Endpoints
 # -----------------------------------------------------------------------------
+@app.get("/health")
+async def health_check():
+    """Health check endpoint exposing readiness and artifact status."""
+    return {
+        "status": "healthy" if pipeline is not None else "degraded",
+        "service": "CDC BRFSS Diabetes Risk Stratification API",
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "model_ready": pipeline is not None,
+        "explainer_ready": explainer is not None,
+        "artifacts_loaded": {
+            "pipeline": pipeline is not None,
+            "explainer": explainer is not None,
+            "metadata": metadata is not None,
+            "metrics": metrics_cache is not None
+        },
+        "model_info": {
+            "version": metadata.get("model_version", "unknown") if metadata else "unknown",
+            "model_type": type(pipeline.named_steps["classifier"]).__name__ if pipeline else "none",
+            "dataset_type": "real_cdc_brfss_2015"
+        },
+        "supported_classes": CLASS_NAMES
+    }
+
+
+@app.get("/metrics")
+async def get_metrics():
+    """Returns test set evaluation metrics and comparative baselines."""
+    if metrics_cache is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Evaluation metrics artifact (artifacts/model_metrics.json) is not loaded."
+        )
+    return metrics_cache
+
+
+@app.get("/sample-patients")
+async def get_sample_patients():
+    """Returns curated representative survey profiles for exploration."""
+    return {
+        "healthy_adult": {
+            "name": "Healthy Young Adult (Low Risk Profile)",
+            "description": "Young active individual with normal BMI, healthy diet, and no chronic diagnoses.",
+            "data": {
+                "high_bp": 0, "high_chol": 0, "chol_check": 1, "bmi": 22.4, "smoker": 0,
+                "stroke": 0, "heart_disease_or_attack": 0, "phys_activity": 1, "fruits": 1,
+                "veggies": 1, "hvy_alcohol_consump": 0, "any_healthcare": 1, "no_doc_bc_cost": 0,
+                "gen_hlth": 1, "ment_hlth": 0.0, "phys_hlth": 0.0, "diff_walk": 0,
+                "sex": 0, "age": 3, "education": 6, "income": 8
+            }
+        },
+        "prediabetic_risk": {
+            "name": "Sedentary Middle-Aged Adult (Pre-diabetic Lifestyle Risk)",
+            "description": "Middle-aged respondent with elevated BMI, sedentary habits, and cost barrier to care.",
+            "data": {
+                "high_bp": 1, "high_chol": 0, "chol_check": 1, "bmi": 28.5, "smoker": 0,
+                "stroke": 0, "heart_disease_or_attack": 0, "phys_activity": 0, "fruits": 0,
+                "veggies": 1, "hvy_alcohol_consump": 0, "any_healthcare": 1, "no_doc_bc_cost": 1,
+                "gen_hlth": 3, "ment_hlth": 4.0, "phys_hlth": 2.0, "diff_walk": 0,
+                "sex": 1, "age": 7, "education": 4, "income": 5
+            }
+        },
+        "diabetic_multimorbid": {
+            "name": "Older Adult with Comorbidities (High Risk Diabetic)",
+            "description": "Older respondent with diagnosed hypertension, hyperlipidemia, obesity, and mobility limits.",
+            "data": {
+                "high_bp": 1, "high_chol": 1, "chol_check": 1, "bmi": 34.2, "smoker": 1,
+                "stroke": 0, "heart_disease_or_attack": 1, "phys_activity": 0, "fruits": 0,
+                "veggies": 0, "hvy_alcohol_consump": 0, "any_healthcare": 1, "no_doc_bc_cost": 0,
+                "gen_hlth": 5, "ment_hlth": 10.0, "phys_hlth": 20.0, "diff_walk": 1,
+                "sex": 1, "age": 10, "education": 3, "income": 3
+            }
+        }
+    }
+
+
+def _run_inference(patient_data: PatientData) -> PredictionResponse:
+    """Synchronous inference helper executed inside run_in_threadpool."""
+    raw_dict = patient_data.model_dump()
+    input_df = pd.DataFrame([raw_dict])[RAW_INPUT_FEATURES]
+
+    classifier = pipeline.named_steps["classifier"]
+    classes_ = list(classifier.classes_)
+
+    probs = pipeline.predict_proba(input_df)[0]
+    col_idx = int(np.argmax(probs))
+    predicted_class_id = int(classes_[col_idx])
+    confidence = float(np.max(probs))
+    risk_name = CLASS_DEFINITIONS[predicted_class_id]
+
+    prob_dict = {
+        CLASS_DEFINITIONS[int(cls_id)]: float(np.round(probs[c_idx], 4))
+        for c_idx, cls_id in enumerate(classes_)
+    }
+
+    # SHAP local attribution using exact transformed feature order
+    top_features: List[FeatureContribution] = []
+    shap_status = "unavailable"
+    shap_reason = None
+    base_value = None
+    omitted_sum = None
+    additivity_check = None
+
+    if explainer is not None:
+        try:
+            preprocessor = pipeline.named_steps["preprocessor"]
+            X_trans = preprocessor.transform(input_df)
+
+            # Transformed feature names order from ColumnTransformer
+            transformed_feature_names = [col.split("__")[-1] for col in preprocessor.get_feature_names_out()]
+
+            shap_raw = explainer.shap_values(X_trans)
+            if isinstance(shap_raw, np.ndarray) and len(shap_raw.shape) == 3:
+                # Shape: (n_samples, n_features, n_classes)
+                shap_cls = shap_raw[0, :, col_idx]
+            elif isinstance(shap_raw, list):
+                # List of arrays per class: shap_raw[col_idx] has shape (n_samples, n_features)
+                shap_cls = np.array(shap_raw[col_idx])[0]
+            else:
+                shap_cls = np.array(shap_raw)[0]
+
+            if hasattr(explainer, "expected_value") and explainer.expected_value is not None:
+                ev = explainer.expected_value
+                if isinstance(ev, (list, np.ndarray)):
+                    base_value = float(ev[col_idx])
+                else:
+                    base_value = float(ev)
+            else:
+                raise ValueError("SHAP explainer does not contain an expected_value.")
+
+            feature_shaps = []
+            for idx, feat_name in enumerate(transformed_feature_names):
+                s_val = float(shap_cls[idx])
+                p_val = raw_dict[feat_name]
+                disp = FEATURE_DISPLAY_NAMES.get(feat_name, feat_name)
+                direction = "supports" if s_val > 0 else ("opposes" if s_val < 0 else "neutral")
+                prefix = "Supports" if s_val > 0 else "Opposes"
+                # Percentage point description
+                pp_val = s_val * 100.0
+                impact_str = f"{prefix} {risk_name} prediction ({pp_val:+.1f} percentage points)"
+                insight = generate_feature_clinical_insight(feat_name, p_val, s_val, risk_name)
+
+                feature_shaps.append(FeatureContribution(
+                    feature=feat_name,
+                    display_name=disp,
+                    patient_value=p_val,
+                    shap_value=float(np.round(s_val, 4)),
+                    impact=impact_str,
+                    direction=direction,
+                    clinical_insight=insight
+                ))
+
+            # Sort by absolute contribution magnitude
+            feature_shaps.sort(key=lambda f: abs(f.shap_value), reverse=True)
+            top_features = feature_shaps[:8]
+
+            all_shap_sum = float(np.sum(shap_cls))
+            top_shap_sum = float(sum(f.shap_value for f in top_features))
+            omitted_sum = float(np.round(all_shap_sum - top_shap_sum, 4))
+            reconstructed = float(base_value + all_shap_sum)
+            model_out = float(probs[col_idx])
+            abs_diff = float(abs(reconstructed - model_out))
+
+            additivity_check = AdditivityCheck(
+                base_value=float(np.round(base_value, 4)),
+                all_features_shap_sum=float(np.round(all_shap_sum, 4)),
+                reconstructed_output=float(np.round(reconstructed, 4)),
+                model_output=float(np.round(model_out, 4)),
+                absolute_difference=float(np.round(abs_diff, 4)),
+                is_additive=(abs_diff < 0.05)
+            )
+            shap_status = "available"
+
+        except Exception as e:
+            logger.error("SHAP explanation failed: %s", e)
+            shap_status = "unavailable"
+            shap_reason = str(e)
+
+    recs = generate_clinical_recommendations(risk_name, patient_data)
+
+    return PredictionResponse(
+        status="success",
+        metadata=ResponseMetadata(
+            prediction_source="trained_model",
+            model_version=metadata.get("model_version", "2.1.0-brfss") if metadata else "2.1.0-brfss",
+            model_type=type(pipeline.named_steps["classifier"]).__name__,
+            dataset_type="real_cdc_brfss_2015",
+            explanation_status=shap_status,
+            explanation_method="TreeSHAP (Holdout-free background)" if shap_status == "available" else None,
+            probability_calibration="uncalibrated_ensemble_vote",
+            imputed_features=[],
+            disclaimer="Trained on CDC BRFSS public health surveillance data. For educational and research demonstration."
+        ),
+        prediction=PredictionResult(
+            class_id=predicted_class_id,
+            risk_class=risk_name,
+            confidence=float(np.round(confidence, 4)),
+            probabilities=prob_dict
+        ),
+        shap_explanation=SHAPExplanation(
+            status=shap_status,
+            reason=shap_reason,
+            explained_class=risk_name if shap_status == "available" else None,
+            explained_class_id=predicted_class_id if shap_status == "available" else None,
+            output_space="probability" if shap_status == "available" else None,
+            base_value=float(np.round(base_value, 4)) if base_value is not None else None,
+            top_features=top_features,
+            omitted_features_shap_sum=omitted_sum,
+            additivity_check=additivity_check
+        ),
+        clinical_recommendations=recs,
+        timestamp=datetime.now(timezone.utc).isoformat()
+    )
+
+
 @app.post("/predict", response_model=PredictionResponse)
-async def predict_diabetes_risk(patient: PatientData):
+async def predict_diabetes(patient: PatientData):
     """
-    Evaluates patient profile through trained real-world CDC BRFSS machine learning pipeline.
-    Returns predicted class, probabilities, class-relative SHAP attributions, and additivity checks.
+    Main inference endpoint evaluating the trained Scikit-Learn pipeline and TreeSHAP.
+    Runs non-blocking in threadpool.
     """
     if pipeline is None:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Model pipeline artifacts are not loaded. Run 'python ml_pipeline.py' first."
+            detail="Trained ML pipeline artifact (artifacts/model_pipeline.joblib) is not loaded."
         )
 
     try:
-        raw_dict = patient.model_dump()
-        input_df = pd.DataFrame([raw_dict])[ALL_FEATURE_KEYS]
-
-        probs = pipeline.predict_proba(input_df)[0]
-        cls_id = int(np.argmax(probs))
-        confidence = float(np.max(probs))
-        risk_name = CLASS_MAP[cls_id]
-
-        prob_dict = {CLASS_NAMES[i]: float(np.round(probs[i], 4)) for i in range(len(CLASS_NAMES))}
-
-        # SHAP local attribution
-        top_features: List[FeatureContribution] = []
-        shap_status = "unavailable"
-        shap_reason = None
-        base_value = None
-        omitted_sum = None
-        additivity_check = None
-
-        if explainer is not None:
-            try:
-                preprocessor = pipeline.named_steps["preprocessor"]
-                X_trans = preprocessor.transform(input_df)
-
-                shap_raw = explainer.shap_values(X_trans)
-                if isinstance(shap_raw, list):
-                    shap_cls = np.array(shap_raw[cls_id])[0]
-                elif isinstance(shap_raw, np.ndarray) and len(shap_raw.shape) == 3:
-                    shap_cls = shap_raw[0, :, cls_id]
-                else:
-                    shap_cls = np.array(shap_raw)[0]
-
-                if hasattr(explainer, "expected_value"):
-                    ev = explainer.expected_value
-                    base_value = float(ev[cls_id]) if isinstance(ev, (list, np.ndarray)) else float(ev)
-                else:
-                    base_value = 0.33
-
-                feature_shaps = []
-                for idx, feat_name in enumerate(ALL_FEATURE_KEYS):
-                    s_val = float(shap_cls[idx])
-                    p_val = raw_dict[feat_name]
-                    disp = FEATURE_DISPLAY_NAMES.get(feat_name, feat_name)
-                    direction = "supports" if s_val > 0 else ("opposes" if s_val < 0 else "neutral")
-                    prefix = "Supports" if s_val > 0 else "Opposes"
-                    impact_str = f"{prefix} {risk_name} prediction ({s_val:+.1%})"
-                    insight = generate_feature_clinical_insight(feat_name, p_val, s_val, risk_name)
-
-                    feature_shaps.append(FeatureContribution(
-                        feature=feat_name,
-                        display_name=disp,
-                        patient_value=p_val,
-                        shap_value=float(np.round(s_val, 4)),
-                        impact=impact_str,
-                        direction=direction,
-                        clinical_insight=insight
-                    ))
-
-                # Top features sorted by absolute magnitude
-                feature_shaps.sort(key=lambda f: abs(f.shap_value), reverse=True)
-                top_features = feature_shaps[:8]
-
-                all_shap_sum = float(np.sum(shap_cls))
-                top_shap_sum = float(sum(f.shap_value for f in top_features))
-                omitted_sum = float(np.round(all_shap_sum - top_shap_sum, 4))
-                reconstructed = float(base_value + all_shap_sum)
-                model_out = float(probs[cls_id])
-                abs_diff = float(abs(reconstructed - model_out))
-
-                additivity_check = AdditivityCheck(
-                    base_value=float(np.round(base_value, 4)),
-                    all_features_shap_sum=float(np.round(all_shap_sum, 4)),
-                    reconstructed_output=float(np.round(reconstructed, 4)),
-                    model_output=float(np.round(model_out, 4)),
-                    absolute_difference=float(np.round(abs_diff, 4)),
-                    is_additive=(abs_diff < 0.05)
-                )
-                shap_status = "available"
-
-            except Exception as e:
-                logger.error("SHAP explanation failed: %s", e)
-                shap_status = "unavailable"
-                shap_reason = str(e)
-
-        recs = generate_clinical_recommendations(risk_name, patient)
-
-        return PredictionResponse(
-            status="success",
-            metadata=ResponseMetadata(
-                prediction_source="trained_model",
-                model_version=metadata.get("model_version", "2.0.0-brfss") if metadata else "2.0.0-brfss",
-                model_type=type(pipeline.named_steps["classifier"]).__name__,
-                dataset_type="real_cdc_brfss_2015",
-                explanation_status=shap_status,
-                explanation_method="TreeSHAP (Holdout-free background)" if shap_status == "available" else None,
-                imputed_features=[],
-                disclaimer="Trained on CDC BRFSS public health surveillance data. For educational and research demonstration."
-            ),
-            prediction=PredictionResult(
-                class_id=cls_id,
-                risk_class=risk_name,
-                confidence=float(np.round(confidence, 4)),
-                probabilities=prob_dict
-            ),
-            shap_explanation=SHAPExplanation(
-                status=shap_status,
-                reason=shap_reason,
-                explained_class=risk_name if shap_status == "available" else None,
-                explained_class_id=cls_id if shap_status == "available" else None,
-                output_space="probability" if shap_status == "available" else None,
-                base_value=float(np.round(base_value, 4)) if base_value is not None else None,
-                top_features=top_features,
-                omitted_features_shap_sum=omitted_sum,
-                additivity_check=additivity_check
-            ),
-            clinical_recommendations=recs,
-            timestamp=datetime.now(timezone.utc).isoformat()
-        )
-
+        response = await run_in_threadpool(_run_inference, patient)
+        return response
     except Exception as e:
         logger.error("Inference pipeline error: %s", e)
         raise HTTPException(status_code=500, detail=f"Inference error: {str(e)}")
@@ -528,7 +639,7 @@ async def predict_demo_rules(patient: PatientData):
     Explicit Rule-based epidemiological demonstration.
     Returns confidence=None and probabilities=None with explicit demo labeling.
     """
-    # Deterministic CDC Rule Heuristic
+    # Project-defined Epidemiological Threshold Heuristic
     if patient.high_bp == 1 and patient.high_chol == 1 and patient.bmi >= 30.0 and patient.age >= 9:
         cls_id = 2
         risk_name = "Diabetic"
@@ -537,7 +648,7 @@ async def predict_demo_rules(patient: PatientData):
         risk_name = "Pre-diabetic"
     else:
         cls_id = 0
-        risk_name = "Healthy"
+        risk_name = "No Reported Diabetes"
 
     recs = generate_clinical_recommendations(risk_name, patient)
 
@@ -546,12 +657,13 @@ async def predict_demo_rules(patient: PatientData):
         metadata=ResponseMetadata(
             prediction_source="rule_based_demo",
             model_version=None,
-            model_type="CDC Epidemiological Heuristic Rules",
+            model_type="Project-Defined Epidemiological Heuristic",
             dataset_type="none",
             explanation_status="not_applicable",
             explanation_method=None,
+            probability_calibration="none",
             imputed_features=[],
-            disclaimer="Rule-based demo — not a trained model prediction. No probability or SHAP is measured."
+            disclaimer="Explicit rule-based demonstration mode. Not a trained model prediction."
         ),
         prediction=PredictionResult(
             class_id=cls_id,
@@ -561,131 +673,11 @@ async def predict_demo_rules(patient: PatientData):
         ),
         shap_explanation=SHAPExplanation(
             status="unavailable",
-            reason="Demo mode evaluates deterministic rules. SHAP requires a trained machine learning model.",
-            top_features=[]
+            reason="SHAP explanations are not applicable to the rule-based demonstration mode."
         ),
         clinical_recommendations=recs,
         timestamp=datetime.now(timezone.utc).isoformat()
     )
-
-
-@app.get("/health")
-async def health_check():
-    """Returns backend operational status, model readiness, and artifact state."""
-    return {
-        "status": "healthy",
-        "service": "CDC BRFSS Diabetes Risk Stratification API",
-        "timestamp": datetime.now(timezone.utc).isoformat(),
-        "model_ready": pipeline is not None,
-        "explainer_ready": explainer is not None,
-        "artifacts_loaded": {
-            "pipeline": pipeline is not None,
-            "explainer": explainer is not None,
-            "metadata": metadata is not None,
-            "metrics": metrics_cache is not None,
-        },
-        "model_info": {
-            "version": metadata.get("model_version") if metadata else None,
-            "model_type": metadata.get("estimator") if metadata else None,
-            "dataset_type": metadata.get("dataset_type") if metadata else None,
-        },
-        "supported_classes": CLASS_NAMES,
-    }
-
-
-@app.get("/metrics")
-async def get_model_metrics():
-    """Returns hold-out test set performance metrics from saved artifacts."""
-    if metrics_cache:
-        return metrics_cache
-
-    if os.path.exists(METRICS_PATH):
-        try:
-            with open(METRICS_PATH, "r", encoding="utf-8") as f:
-                return json.load(f)
-        except Exception as e:
-            raise HTTPException(status_code=500, detail=f"Failed to read metrics file: {e}")
-
-    raise HTTPException(
-        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-        detail="Evaluation metrics unavailable. Run ml_pipeline.py first to generate evaluation artifacts."
-    )
-
-
-@app.get("/sample-patients")
-async def get_sample_patients():
-    """Returns verified reference clinical survey profiles from the real CDC BRFSS dataset."""
-    return {
-        "healthy": {
-            "bmi": 22.4,
-            "high_bp": 0,
-            "high_chol": 0,
-            "chol_check": 1,
-            "smoker": 0,
-            "stroke": 0,
-            "heart_disease_or_attack": 0,
-            "phys_activity": 1,
-            "fruits": 1,
-            "veggies": 1,
-            "hvy_alcohol_consump": 0,
-            "any_healthcare": 1,
-            "no_doc_bc_cost": 0,
-            "gen_hlth": 1,
-            "ment_hlth": 0.0,
-            "phys_hlth": 0.0,
-            "diff_walk": 0,
-            "sex": 0,
-            "age": 2,
-            "education": 6,
-            "income": 8
-        },
-        "prediabetic": {
-            "bmi": 28.5,
-            "high_bp": 1,
-            "high_chol": 1,
-            "chol_check": 1,
-            "smoker": 1,
-            "stroke": 0,
-            "heart_disease_or_attack": 0,
-            "phys_activity": 0,
-            "fruits": 1,
-            "veggies": 1,
-            "hvy_alcohol_consump": 0,
-            "any_healthcare": 1,
-            "no_doc_bc_cost": 0,
-            "gen_hlth": 3,
-            "ment_hlth": 2.0,
-            "phys_hlth": 4.0,
-            "diff_walk": 0,
-            "sex": 1,
-            "age": 8,
-            "education": 4,
-            "income": 5
-        },
-        "diabetic": {
-            "bmi": 34.6,
-            "high_bp": 1,
-            "high_chol": 1,
-            "chol_check": 1,
-            "smoker": 1,
-            "stroke": 1,
-            "heart_disease_or_attack": 1,
-            "phys_activity": 0,
-            "fruits": 0,
-            "veggies": 1,
-            "hvy_alcohol_consump": 0,
-            "any_healthcare": 1,
-            "no_doc_bc_cost": 1,
-            "gen_hlth": 5,
-            "ment_hlth": 10.0,
-            "phys_hlth": 15.0,
-            "diff_walk": 1,
-            "sex": 1,
-            "age": 10,
-            "education": 4,
-            "income": 3
-        }
-    }
 
 
 if __name__ == "__main__":

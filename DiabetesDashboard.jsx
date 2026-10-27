@@ -1,15 +1,17 @@
 import React, { useState, useEffect, useMemo } from 'react';
 
 /**
- * DiabetesDashboard.jsx - CDC BRFSS Diabetes Risk Intelligence Interface
+ * DiabetesDashboard.jsx - CDC BRFSS Diabetes Risk Stratification Interface
  * =========================================================================
- * Real-World Public Health Decision Support:
+ * Rigorous Portfolio Implementation:
  * - Powered by a Machine Learning model trained on the U.S. CDC Behavioral Risk
- *   Factor Surveillance System (BRFSS) dataset (250,000+ real survey records).
- * - Connects to FastAPI backend with configurable VITE_API_BASE_URL.
- * - Shows truthful operational status with explicit retry on errors.
- * - Features verified TreeSHAP explainability labeled relative to the explained class.
- * - Explicit opt-in Rule-Based Demo Mode for offline demonstration.
+ *   Factor Surveillance System (BRFSS) dataset.
+ * - Educational & Research Portfolio: Estimates statistical associations with
+ *   self-reported survey diabetes status. Not validated diagnostic software.
+ * - Stale state tracking: Clearly invalidates displayed results when inputs change.
+ * - Structured field-level validation errors (HTTP 422).
+ * - Verified TreeSHAP explainability labeled relative to the explained class.
+ * - Explicit opt-in Rule Demo Mode (illustrative heuristic, not ML).
  */
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:8000';
@@ -60,8 +62,9 @@ const INCOME_OPTIONS = [
 
 const SCENARIO_PRESETS = {
   healthy: {
-    name: 'Healthy Young Adult',
-    badge: 'Normoglycemic CDC Profile',
+    name: 'Illustrative: Low-Risk Active Profile',
+    badge: 'No Reported Diabetes',
+    description: 'Active young adult, normal BMI, healthy dietary habits, no chronic diagnoses.',
     data: {
       bmi: 22.4,
       high_bp: 0,
@@ -87,8 +90,9 @@ const SCENARIO_PRESETS = {
     }
   },
   prediabetic: {
-    name: 'Borderline Pre-diabetic',
-    badge: 'Elevated Risk Factors',
+    name: 'Illustrative: Borderline Survey Indicators',
+    badge: 'Intermediate Indicators',
+    description: 'Middle-aged individual with overweight BMI, diagnosed hypertension, sedentary habits.',
     data: {
       bmi: 28.5,
       high_bp: 1,
@@ -114,8 +118,9 @@ const SCENARIO_PRESETS = {
     }
   },
   diabetic: {
-    name: 'Diagnosed Diabetic',
-    badge: 'High Comorbidity Pattern',
+    name: 'Illustrative: High-Risk Comorbid Profile',
+    badge: 'Elevated Risk Factors',
+    description: 'Older respondent with class-1 obesity, hypertension, hyperlipidemia, and cardiovascular history.',
     data: {
       bmi: 34.6,
       high_bp: 1,
@@ -147,11 +152,17 @@ export default function DiabetesDashboard() {
   const [demoMode, setDemoMode] = useState(false);
   const [loading, setLoading] = useState(false);
   const [predictionResult, setPredictionResult] = useState(null);
-  const [backendStatus, setBackendStatus] = useState('checking');
+  const [isStale, setIsStale] = useState(false);
+  const [fieldErrors, setFieldErrors] = useState({});
+
+  const [backendStatus, setBackendStatus] = useState('checking'); // 'live' | 'model_missing' | 'offline' | 'checking'
   const [backendMeta, setBackendMeta] = useState(null);
   const [backendError, setBackendError] = useState(null);
+
   const [metricsData, setMetricsData] = useState(null);
-  const [activeTab, setActiveTab] = useState('assessment');
+  const [metricsLoading, setMetricsLoading] = useState(false);
+  const [metricsError, setMetricsError] = useState(null);
+  const [activeTab, setActiveTab] = useState('assessment'); // 'assessment' | 'metrics'
 
   // Check backend health on mount
   const checkBackendHealth = async () => {
@@ -165,7 +176,7 @@ export default function DiabetesDashboard() {
       } else {
         setBackendStatus('offline');
       }
-    } catch (err) {
+    } catch {
       setBackendStatus('offline');
     }
   };
@@ -176,13 +187,28 @@ export default function DiabetesDashboard() {
     return () => clearInterval(interval);
   }, []);
 
-  // Fetch metrics when tab is switched
+  // Fetch metrics when metrics tab is selected
+  const fetchMetrics = async () => {
+    setMetricsLoading(true);
+    setMetricsError(null);
+    try {
+      const res = await fetch(`${API_BASE_URL}/metrics`);
+      if (!res.ok) {
+        throw new Error(`Metrics endpoint returned HTTP ${res.status}`);
+      }
+      const data = await res.json();
+      setMetricsData(data);
+    } catch (err) {
+      setMetricsError(err.message || 'Failed to fetch model evaluation metrics.');
+      setMetricsData(null);
+    } finally {
+      setMetricsLoading(false);
+    }
+  };
+
   useEffect(() => {
-    if (activeTab === 'metrics' && !metricsData) {
-      fetch(`${API_BASE_URL}/metrics`)
-        .then((r) => (r.ok ? r.json() : null))
-        .then((data) => setMetricsData(data))
-        .catch(() => setMetricsData(null));
+    if (activeTab === 'metrics' && !metricsData && !metricsLoading) {
+      fetchMetrics();
     }
   }, [activeTab]);
 
@@ -191,17 +217,41 @@ export default function DiabetesDashboard() {
       ...prev,
       [field]: typeof value === 'string' && !isNaN(Number(value)) ? Number(value) : value,
     }));
+    // Clear error for field if any
+    if (fieldErrors[field]) {
+      setFieldErrors((prev) => {
+        const updated = { ...prev };
+        delete updated[field];
+        return updated;
+      });
+    }
+    // Mark previous result as stale
+    if (predictionResult) {
+      setIsStale(true);
+    }
   };
 
   const handlePresetSelect = (presetKey) => {
     if (SCENARIO_PRESETS[presetKey]) {
       setFormData(SCENARIO_PRESETS[presetKey].data);
+      setFieldErrors({});
+      if (predictionResult) {
+        setIsStale(true);
+      }
+    }
+  };
+
+  const handleDemoToggle = (e) => {
+    setDemoMode(e.target.checked);
+    if (predictionResult) {
+      setIsStale(true);
     }
   };
 
   const handleRunAssessment = async () => {
     setLoading(true);
     setBackendError(null);
+    setFieldErrors({});
 
     const endpoint = demoMode ? `${API_BASE_URL}/demo-predict` : `${API_BASE_URL}/predict`;
 
@@ -214,11 +264,20 @@ export default function DiabetesDashboard() {
 
       if (!res.ok) {
         const errorBody = await res.json().catch(() => ({ detail: res.statusText }));
+        if (res.status === 422 && Array.isArray(errorBody.errors)) {
+          const mapped = {};
+          errorBody.errors.forEach((e) => {
+            mapped[e.field] = e.message;
+          });
+          setFieldErrors(mapped);
+          throw new Error(`Input validation failed for ${errorBody.errors.length} field(s). Please review highlighted inputs.`);
+        }
         throw new Error(errorBody.detail || `Server error (${res.status})`);
       }
 
       const data = await res.json();
       setPredictionResult(data);
+      setIsStale(false);
     } catch (err) {
       setBackendError(err.message || 'Failed to connect to ML prediction backend.');
     } finally {
@@ -229,6 +288,7 @@ export default function DiabetesDashboard() {
   // Color mappings
   const getRiskColor = (riskClass) => {
     switch (riskClass) {
+      case 'No Reported Diabetes':
       case 'Healthy':
         return {
           bg: 'bg-emerald-950/40',
@@ -284,7 +344,7 @@ export default function DiabetesDashboard() {
                   CDC BRFSS v2.0
                 </span>
               </div>
-              <p className="text-xs text-slate-400">Public Health Population Risk Screening</p>
+              <p className="text-xs text-slate-400">Public Health Population Risk Screening (Educational Portfolio)</p>
             </div>
           </div>
 
@@ -298,6 +358,8 @@ export default function DiabetesDashboard() {
                     ? 'bg-emerald-400 shadow-sm shadow-emerald-400/50'
                     : backendStatus === 'checking'
                     ? 'bg-amber-400 animate-pulse'
+                    : backendStatus === 'model_missing'
+                    ? 'bg-amber-500'
                     : 'bg-rose-500'
                 }`}
               />
@@ -306,6 +368,8 @@ export default function DiabetesDashboard() {
                   ? 'CDC BRFSS Model Live'
                   : backendStatus === 'checking'
                   ? 'Connecting...'
+                  : backendStatus === 'model_missing'
+                  ? 'Backend Online (Model Missing)'
                   : 'Backend Offline'}
               </span>
             </div>
@@ -315,7 +379,7 @@ export default function DiabetesDashboard() {
               <input
                 type="checkbox"
                 checked={demoMode}
-                onChange={(e) => setDemoMode(e.target.checked)}
+                onChange={handleDemoToggle}
                 className="rounded border-slate-700 text-amber-500 focus:ring-0 cursor-pointer"
               />
               <span className={demoMode ? 'text-amber-400 font-semibold' : 'text-slate-400'}>
@@ -328,6 +392,18 @@ export default function DiabetesDashboard() {
 
       {/* Main Content Container */}
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-6">
+        {/* Research & Educational Scope Disclaimer */}
+        <div className="bg-slate-900/40 border border-slate-800 rounded-xl p-3.5 flex items-start space-x-3 text-xs text-slate-400">
+          <svg className="w-4 h-4 text-cyan-400 mt-0.5 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+          </svg>
+          <div>
+            <span className="font-semibold text-slate-300">Educational & Methodological Scope: </span>
+            This interface illustrates machine learning classification and TreeSHAP explainability on cross-sectional self-reported survey indicators from the CDC BRFSS.
+            It identifies statistical associations with existing self-reported diabetes status, <span className="text-slate-200">not a validated medical prediction of future diabetes onset</span>, and does not replace diagnostic clinical blood tests (fasting plasma glucose or HbA1c).
+          </div>
+        </div>
+
         {/* Navigation Tabs */}
         <div className="flex items-center space-x-2 border-b border-slate-800 pb-3">
           <button
@@ -338,7 +414,7 @@ export default function DiabetesDashboard() {
                 : 'text-slate-400 hover:text-white hover:bg-slate-900'
             }`}
           >
-            Clinical Assessment Form
+            Survey Assessment Form
           </button>
           <button
             onClick={() => setActiveTab('metrics')}
@@ -348,7 +424,7 @@ export default function DiabetesDashboard() {
                 : 'text-slate-400 hover:text-white hover:bg-slate-900'
             }`}
           >
-            CDC BRFSS Model Metrics & Validation
+            Model Benchmark & Limitations
           </button>
         </div>
 
@@ -359,10 +435,10 @@ export default function DiabetesDashboard() {
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
             </svg>
             <div className="text-xs text-amber-200">
-              <p className="font-semibold text-amber-300">Explicit Demo Mode Activated</p>
+              <p className="font-semibold text-amber-300">Illustrative Rule Demo Mode Active</p>
               <p className="mt-0.5">
-                Rule-based demo — not a trained model prediction. Evaluates deterministic epidemiological rules;
-                confidence percentages, probabilities, and SHAP feature attributions are omitted.
+                Evaluates a project-defined heuristic rule rather than the trained Random Forest classifier.
+                Probabilities, calibration metrics, and SHAP feature attributions are omitted.
               </p>
             </div>
           </div>
@@ -372,7 +448,7 @@ export default function DiabetesDashboard() {
         {backendError && (
           <div className="bg-rose-500/10 border border-rose-500/30 rounded-xl p-4 flex items-center justify-between">
             <div className="flex items-center space-x-3">
-              <svg className="w-5 h-5 text-rose-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <svg className="w-5 h-5 text-rose-400 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
               </svg>
               <div>
@@ -382,9 +458,9 @@ export default function DiabetesDashboard() {
             </div>
             <button
               onClick={handleRunAssessment}
-              className="px-3 py-1.5 bg-rose-600 hover:bg-rose-500 text-white rounded-lg text-xs font-medium transition shadow"
+              className="px-3 py-1.5 bg-rose-600 hover:bg-rose-500 text-white rounded-lg text-xs font-medium transition shadow flex-shrink-0 ml-4"
             >
-              Retry Assessment
+              Retry
             </button>
           </div>
         )}
@@ -397,9 +473,9 @@ export default function DiabetesDashboard() {
               <div className="bg-slate-900/70 border border-slate-800 rounded-2xl p-5 shadow-sm">
                 <div className="flex items-center justify-between mb-3">
                   <h3 className="text-xs font-semibold text-slate-300 uppercase tracking-wider">
-                    CDC Population Scenarios (1-Click Loaders)
+                    Illustrative Population Profiles
                   </h3>
-                  <span className="text-xs text-slate-500">Real CDC Survey Distributions</span>
+                  <span className="text-[11px] text-slate-500">Non-Clinical Educational Presets</span>
                 </div>
                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                   {Object.entries(SCENARIO_PRESETS).map(([key, preset]) => (
@@ -431,7 +507,7 @@ export default function DiabetesDashboard() {
                       <select
                         value={formData.age}
                         onChange={(e) => handleInputChange('age', Number(e.target.value))}
-                        className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-indigo-500"
+                        className={`w-full bg-slate-950 border ${fieldErrors.age ? 'border-rose-500' : 'border-slate-800'} rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-indigo-500`}
                       >
                         {AGE_OPTIONS.map((opt) => (
                           <option key={opt.value} value={opt.value}>
@@ -439,6 +515,7 @@ export default function DiabetesDashboard() {
                           </option>
                         ))}
                       </select>
+                      {fieldErrors.age && <p className="text-[11px] text-rose-400 mt-1">{fieldErrors.age}</p>}
                     </div>
 
                     <div>
@@ -446,11 +523,12 @@ export default function DiabetesDashboard() {
                       <select
                         value={formData.sex}
                         onChange={(e) => handleInputChange('sex', Number(e.target.value))}
-                        className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-indigo-500"
+                        className={`w-full bg-slate-950 border ${fieldErrors.sex ? 'border-rose-500' : 'border-slate-800'} rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-indigo-500`}
                       >
                         <option value={0}>Female</option>
                         <option value={1}>Male</option>
                       </select>
+                      {fieldErrors.sex && <p className="text-[11px] text-rose-400 mt-1">{fieldErrors.sex}</p>}
                     </div>
 
                     <div>
@@ -458,7 +536,7 @@ export default function DiabetesDashboard() {
                       <select
                         value={formData.education}
                         onChange={(e) => handleInputChange('education', Number(e.target.value))}
-                        className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-indigo-500"
+                        className={`w-full bg-slate-950 border ${fieldErrors.education ? 'border-rose-500' : 'border-slate-800'} rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-indigo-500`}
                       >
                         {EDUCA_OPTIONS.map((opt) => (
                           <option key={opt.value} value={opt.value}>
@@ -466,6 +544,7 @@ export default function DiabetesDashboard() {
                           </option>
                         ))}
                       </select>
+                      {fieldErrors.education && <p className="text-[11px] text-rose-400 mt-1">{fieldErrors.education}</p>}
                     </div>
 
                     <div>
@@ -473,7 +552,7 @@ export default function DiabetesDashboard() {
                       <select
                         value={formData.income}
                         onChange={(e) => handleInputChange('income', Number(e.target.value))}
-                        className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-indigo-500"
+                        className={`w-full bg-slate-950 border ${fieldErrors.income ? 'border-rose-500' : 'border-slate-800'} rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-indigo-500`}
                       >
                         {INCOME_OPTIONS.map((opt) => (
                           <option key={opt.value} value={opt.value}>
@@ -481,6 +560,7 @@ export default function DiabetesDashboard() {
                           </option>
                         ))}
                       </select>
+                      {fieldErrors.income && <p className="text-[11px] text-rose-400 mt-1">{fieldErrors.income}</p>}
                     </div>
                   </div>
                 </div>
@@ -488,7 +568,7 @@ export default function DiabetesDashboard() {
                 {/* Section 2: Vitals & Diagnosed Medical Conditions */}
                 <div className="border-t border-slate-800 pt-5">
                   <h4 className="text-xs font-semibold text-indigo-400 uppercase tracking-wider mb-4">
-                    2. Vitals & Clinical Diagnoses
+                    2. Vitals & Survey Health Indicators
                   </h4>
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                     <div>
@@ -503,32 +583,35 @@ export default function DiabetesDashboard() {
                         max="70.0"
                         value={formData.bmi}
                         onChange={(e) => handleInputChange('bmi', parseFloat(e.target.value) || 20.0)}
-                        className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-indigo-500"
+                        className={`w-full bg-slate-950 border ${fieldErrors.bmi ? 'border-rose-500' : 'border-slate-800'} rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-indigo-500`}
                       />
+                      {fieldErrors.bmi && <p className="text-[11px] text-rose-400 mt-1">{fieldErrors.bmi}</p>}
                     </div>
 
                     <div>
-                      <label className="block text-xs font-medium text-slate-300 mb-1">High Blood Pressure</label>
+                      <label className="block text-xs font-medium text-slate-300 mb-1">High Blood Pressure History</label>
                       <select
                         value={formData.high_bp}
                         onChange={(e) => handleInputChange('high_bp', Number(e.target.value))}
-                        className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-indigo-500"
+                        className={`w-full bg-slate-950 border ${fieldErrors.high_bp ? 'border-rose-500' : 'border-slate-800'} rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-indigo-500`}
                       >
                         <option value={0}>No (Normal Blood Pressure)</option>
-                        <option value={1}>Yes (Diagnosed Hypertension)</option>
+                        <option value={1}>Yes (Reported Hypertension)</option>
                       </select>
+                      {fieldErrors.high_bp && <p className="text-[11px] text-rose-400 mt-1">{fieldErrors.high_bp}</p>}
                     </div>
 
                     <div>
-                      <label className="block text-xs font-medium text-slate-300 mb-1">High Blood Cholesterol</label>
+                      <label className="block text-xs font-medium text-slate-300 mb-1">High Blood Cholesterol History</label>
                       <select
                         value={formData.high_chol}
                         onChange={(e) => handleInputChange('high_chol', Number(e.target.value))}
-                        className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-indigo-500"
+                        className={`w-full bg-slate-950 border ${fieldErrors.high_chol ? 'border-rose-500' : 'border-slate-800'} rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-indigo-500`}
                       >
                         <option value={0}>No (Normal Cholesterol)</option>
-                        <option value={1}>Yes (Diagnosed Hypercholesterolemia)</option>
+                        <option value={1}>Yes (Reported Hypercholesterolemia)</option>
                       </select>
+                      {fieldErrors.high_chol && <p className="text-[11px] text-rose-400 mt-1">{fieldErrors.high_chol}</p>}
                     </div>
 
                     <div>
@@ -536,11 +619,12 @@ export default function DiabetesDashboard() {
                       <select
                         value={formData.chol_check}
                         onChange={(e) => handleInputChange('chol_check', Number(e.target.value))}
-                        className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-indigo-500"
+                        className={`w-full bg-slate-950 border ${fieldErrors.chol_check ? 'border-rose-500' : 'border-slate-800'} rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-indigo-500`}
                       >
                         <option value={1}>Yes (Tested within 5 years)</option>
                         <option value={0}>No / Never checked</option>
                       </select>
+                      {fieldErrors.chol_check && <p className="text-[11px] text-rose-400 mt-1">{fieldErrors.chol_check}</p>}
                     </div>
                   </div>
                 </div>
@@ -556,11 +640,12 @@ export default function DiabetesDashboard() {
                       <select
                         value={formData.stroke}
                         onChange={(e) => handleInputChange('stroke', Number(e.target.value))}
-                        className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-indigo-500"
+                        className={`w-full bg-slate-950 border ${fieldErrors.stroke ? 'border-rose-500' : 'border-slate-800'} rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-indigo-500`}
                       >
                         <option value={0}>No</option>
                         <option value={1}>Yes</option>
                       </select>
+                      {fieldErrors.stroke && <p className="text-[11px] text-rose-400 mt-1">{fieldErrors.stroke}</p>}
                     </div>
 
                     <div>
@@ -568,11 +653,12 @@ export default function DiabetesDashboard() {
                       <select
                         value={formData.heart_disease_or_attack}
                         onChange={(e) => handleInputChange('heart_disease_or_attack', Number(e.target.value))}
-                        className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-indigo-500"
+                        className={`w-full bg-slate-950 border ${fieldErrors.heart_disease_or_attack ? 'border-rose-500' : 'border-slate-800'} rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-indigo-500`}
                       >
                         <option value={0}>No</option>
                         <option value={1}>Yes (CHD or Infarction)</option>
                       </select>
+                      {fieldErrors.heart_disease_or_attack && <p className="text-[11px] text-rose-400 mt-1">{fieldErrors.heart_disease_or_attack}</p>}
                     </div>
 
                     <div>
@@ -580,11 +666,12 @@ export default function DiabetesDashboard() {
                       <select
                         value={formData.diff_walk}
                         onChange={(e) => handleInputChange('diff_walk', Number(e.target.value))}
-                        className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-indigo-500"
+                        className={`w-full bg-slate-950 border ${fieldErrors.diff_walk ? 'border-rose-500' : 'border-slate-800'} rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-indigo-500`}
                       >
                         <option value={0}>No Limitation</option>
-                        <option value={1}>Yes (Climbing/Walking)</option>
+                        <option value={1}>Yes (Difficulty walking/climbing)</option>
                       </select>
+                      {fieldErrors.diff_walk && <p className="text-[11px] text-rose-400 mt-1">{fieldErrors.diff_walk}</p>}
                     </div>
                   </div>
                 </div>
@@ -614,8 +701,8 @@ export default function DiabetesDashboard() {
                         onChange={(e) => handleInputChange('smoker', Number(e.target.value))}
                         className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-indigo-500"
                       >
-                        <option value={0}>Non-Smoker (&lt;100 cigs)</option>
-                        <option value={1}>Smoker (≥100 cigarettes)</option>
+                        <option value={0}>Non-Smoker (&lt;100 cigs lifetime)</option>
+                        <option value={1}>Smoker (≥100 cigarettes lifetime)</option>
                       </select>
                     </div>
 
@@ -700,8 +787,9 @@ export default function DiabetesDashboard() {
                         max="30"
                         value={formData.phys_hlth}
                         onChange={(e) => handleInputChange('phys_hlth', parseFloat(e.target.value) || 0)}
-                        className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-indigo-500"
+                        className={`w-full bg-slate-950 border ${fieldErrors.phys_hlth ? 'border-rose-500' : 'border-slate-800'} rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-indigo-500`}
                       />
+                      {fieldErrors.phys_hlth && <p className="text-[11px] text-rose-400 mt-1">{fieldErrors.phys_hlth}</p>}
                     </div>
 
                     <div>
@@ -714,8 +802,9 @@ export default function DiabetesDashboard() {
                         max="30"
                         value={formData.ment_hlth}
                         onChange={(e) => handleInputChange('ment_hlth', parseFloat(e.target.value) || 0)}
-                        className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-indigo-500"
+                        className={`w-full bg-slate-950 border ${fieldErrors.ment_hlth ? 'border-rose-500' : 'border-slate-800'} rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-indigo-500`}
                       />
+                      {fieldErrors.ment_hlth && <p className="text-[11px] text-rose-400 mt-1">{fieldErrors.ment_hlth}</p>}
                     </div>
                   </div>
                 </div>
@@ -725,7 +814,7 @@ export default function DiabetesDashboard() {
                   <button
                     type="button"
                     onClick={handleRunAssessment}
-                    disabled={loading}
+                    disabled={loading || backendStatus === 'offline'}
                     className="w-full py-3 bg-gradient-to-r from-indigo-600 to-cyan-600 hover:from-indigo-500 hover:to-cyan-500 text-white font-semibold rounded-xl shadow-lg shadow-indigo-600/25 transition disabled:opacity-50 flex items-center justify-center space-x-2 text-sm"
                   >
                     {loading ? (
@@ -734,7 +823,7 @@ export default function DiabetesDashboard() {
                           <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
                           <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
                         </svg>
-                        <span>Running CDC BRFSS Assessment...</span>
+                        <span>Computing CDC BRFSS Assessment...</span>
                       </>
                     ) : (
                       <span>Run CDC BRFSS Risk Assessment</span>
@@ -748,15 +837,30 @@ export default function DiabetesDashboard() {
             <div className="lg:col-span-5 space-y-6">
               {predictionResult ? (
                 <>
+                  {/* Stale Result Warning Banner */}
+                  {isStale && (
+                    <div className="bg-amber-500/15 border border-amber-500/40 rounded-xl p-3 flex items-center justify-between text-xs text-amber-200">
+                      <div className="flex items-center space-x-2">
+                        <svg className="w-4 h-4 text-amber-400 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                        </svg>
+                        <span>Inputs modified. Click "Run Assessment" to update results.</span>
+                      </div>
+                      <span className="text-[10px] uppercase font-bold px-2 py-0.5 rounded bg-amber-500/20 text-amber-300">
+                        Stale
+                      </span>
+                    </div>
+                  )}
+
                   {/* Primary Risk Classification Card */}
-                  <div className={`rounded-2xl border ${riskColors.border} ${riskColors.bg} p-6 shadow-xl relative overflow-hidden`}>
+                  <div className={`rounded-2xl border ${riskColors.border} ${riskColors.bg} p-6 shadow-xl relative overflow-hidden transition ${isStale ? 'opacity-70' : 'opacity-100'}`}>
                     <div className="flex items-center justify-between">
                       <span className="text-xs uppercase font-semibold text-slate-400 tracking-wider">
                         Risk Stratification Result
                       </span>
                       <span className={`text-xs px-2.5 py-1 rounded-full font-semibold border ${riskColors.badge}`}>
                         {predictionResult.metadata.prediction_source === 'rule_based_demo'
-                          ? 'Rule Demo'
+                          ? 'Project Heuristic Demo'
                           : `${(predictionResult.prediction.confidence * 100).toFixed(1)}% Confidence`}
                       </span>
                     </div>
@@ -766,11 +870,11 @@ export default function DiabetesDashboard() {
                         {predictionResult.prediction.risk_class}
                       </h2>
                       <p className="text-xs text-slate-300 mt-1">
-                        {predictionResult.prediction.risk_class === 'Healthy'
-                          ? 'Low probability of diabetes or pre-diabetes based on CDC BRFSS population screening.'
+                        {predictionResult.prediction.risk_class === 'No Reported Diabetes' || predictionResult.prediction.risk_class === 'Healthy'
+                          ? 'Low statistical probability of reported diabetes in CDC BRFSS cross-sectional survey data.'
                           : predictionResult.prediction.risk_class === 'Pre-diabetic'
-                          ? 'Intermediate glycemic risk indicator pattern. Early lifestyle intervention recommended.'
-                          : 'High probability of diagnosed diabetes or metabolic dysfunction. Medical follow-up advised.'}
+                          ? 'Intermediate survey risk indicators (borderline glycemic patterns in behavioral survey).'
+                          : 'Elevated statistical probability of self-reported diabetes diagnosis. Clinical consultation advised.'}
                       </p>
                     </div>
 
@@ -778,20 +882,24 @@ export default function DiabetesDashboard() {
                     {predictionResult.prediction.probabilities && (
                       <div className="mt-6 space-y-2 border-t border-slate-800/80 pt-4">
                         <div className="flex justify-between text-xs text-slate-400">
-                          <span>Class Probability Distribution</span>
+                          <span>Uncalibrated Class Probability Distribution</span>
                           <span>Sum: 100%</span>
                         </div>
                         <div className="grid grid-cols-3 gap-2">
                           {Object.entries(predictionResult.prediction.probabilities).map(([cls, prob]) => (
                             <div key={cls} className="bg-slate-900/80 p-2.5 rounded-xl border border-slate-800 text-center">
-                              <div className="text-[11px] text-slate-400">{cls}</div>
+                              <div className="text-[11px] text-slate-400 truncate">{cls}</div>
                               <div className="text-sm font-bold text-white mt-0.5">
                                 {(prob * 100).toFixed(1)}%
                               </div>
                               <div className="w-full bg-slate-800 h-1 rounded-full mt-1.5 overflow-hidden">
                                 <div
                                   className={`h-full ${
-                                    cls === 'Healthy' ? 'bg-emerald-400' : cls === 'Pre-diabetic' ? 'bg-amber-400' : 'bg-rose-500'
+                                    cls === 'No Reported Diabetes' || cls === 'Healthy'
+                                      ? 'bg-emerald-400'
+                                      : cls === 'Pre-diabetic'
+                                      ? 'bg-amber-400'
+                                      : 'bg-rose-500'
                                   }`}
                                   style={{ width: `${Math.min(prob * 100, 100)}%` }}
                                 />
@@ -804,13 +912,13 @@ export default function DiabetesDashboard() {
                   </div>
 
                   {/* SHAP Feature Attribution Card */}
-                  {predictionResult.shap_explanation.status === 'available' && (
+                  {predictionResult.shap_explanation.status === 'available' ? (
                     <div className="bg-slate-900/70 border border-slate-800 rounded-2xl p-6 shadow-sm space-y-4">
                       <div className="flex items-center justify-between">
                         <div>
                           <h3 className="text-sm font-bold text-white">Explainable AI (TreeSHAP)</h3>
                           <p className="text-xs text-slate-400">
-                            Contributions relative to <span className="font-semibold text-slate-200">{predictionResult.shap_explanation.explained_class}</span> prediction
+                            Contributions relative to <span className="font-semibold text-slate-200">{predictionResult.shap_explanation.explained_class}</span> class
                           </p>
                         </div>
                         <span className="text-[11px] px-2 py-0.5 bg-slate-800 text-slate-300 rounded font-mono">
@@ -845,21 +953,34 @@ export default function DiabetesDashboard() {
                       {/* Additivity Verification Badge */}
                       {predictionResult.shap_explanation.additivity_check && (
                         <div className="border-t border-slate-800 pt-3 flex items-center justify-between text-[11px] text-slate-400">
-                          <span>Additivity Check (Base + Σ SHAP)</span>
+                          <span>Additivity Verification (Base + Σ SHAP = Probability)</span>
                           <span className="text-emerald-400 font-semibold flex items-center space-x-1">
                             <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
                             </svg>
-                            <span>Verified Additive (Δ = {predictionResult.shap_explanation.additivity_check.absolute_difference})</span>
+                            <span>Verified (Δ = {predictionResult.shap_explanation.additivity_check.absolute_difference})</span>
                           </span>
                         </div>
                       )}
                     </div>
+                  ) : (
+                    <div className="bg-slate-900/50 border border-slate-800 rounded-2xl p-4 text-xs text-slate-400 flex items-start space-x-3">
+                      <svg className="w-4 h-4 text-amber-400 mt-0.5 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                      </svg>
+                      <div>
+                        <span className="font-semibold text-slate-300">SHAP Explanation Unavailable: </span>
+                        {predictionResult.shap_explanation.reason || 'Local feature attribution is not supported for this mode.'}
+                      </div>
+                    </div>
                   )}
 
-                  {/* Clinical Protocols Card */}
+                  {/* Tailored Lifestyle Guidelines */}
                   <div className="bg-slate-900/70 border border-slate-800 rounded-2xl p-6 shadow-sm space-y-3">
-                    <h3 className="text-sm font-bold text-white">CDC DPP Recommended Interventions</h3>
+                    <h3 className="text-sm font-bold text-white">Project-Defined Educational Lifestyle Pathways</h3>
+                    <p className="text-[11px] text-slate-400">
+                      General preventive public health recommendations aligned with CDC DPP lifestyle principles:
+                    </p>
                     <div className="space-y-2.5">
                       {predictionResult.clinical_recommendations.map((rec, idx) => (
                         <div key={idx} className="p-3 rounded-xl bg-slate-950/50 border border-slate-800/80">
@@ -888,9 +1009,9 @@ export default function DiabetesDashboard() {
                   <svg className="w-12 h-12 text-slate-700 mb-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
                   </svg>
-                  <p className="text-sm font-medium text-slate-400">Ready for Clinical Evaluation</p>
+                  <p className="text-sm font-medium text-slate-400">Ready for Risk Evaluation</p>
                   <p className="text-xs text-slate-500 mt-1 max-w-xs">
-                    Populate the 21 CDC health indicators manually or select a 1-click clinical preset above, then click Run Assessment.
+                    Populate the 21 CDC health indicators manually or select an illustrative profile above, then click Run Assessment.
                   </p>
                 </div>
               )}
@@ -899,12 +1020,33 @@ export default function DiabetesDashboard() {
         ) : (
           /* Metrics Tab */
           <div className="bg-slate-900/70 border border-slate-800 rounded-2xl p-6 shadow-sm space-y-6">
-            <div>
-              <h3 className="text-lg font-bold text-white">CDC BRFSS Real-World Model Benchmark</h3>
-              <p className="text-xs text-slate-400">
-                Evaluation results on the held-out 20% test partition (N = 10,000 real patients) from the CDC Behavioral Risk Factor Surveillance System (BRFSS) dataset.
-              </p>
+            <div className="flex items-center justify-between">
+              <div>
+                <h3 className="text-lg font-bold text-white">CDC BRFSS Model Benchmark & Statistical Limitations</h3>
+                <p className="text-xs text-slate-400">
+                  Evaluation results on the held-out 20% test partition (N = 10,000 real survey respondents) from the CDC BRFSS dataset.
+                </p>
+              </div>
+              <button
+                onClick={fetchMetrics}
+                disabled={metricsLoading}
+                className="px-3 py-1.5 rounded-lg border border-slate-700 bg-slate-950 hover:bg-slate-900 text-xs text-slate-300 font-medium transition"
+              >
+                {metricsLoading ? 'Refreshing...' : 'Refresh Benchmark'}
+              </button>
             </div>
+
+            {metricsError && (
+              <div className="p-4 bg-rose-500/10 border border-rose-500/30 rounded-xl flex items-center justify-between text-xs text-rose-300">
+                <span>{metricsError}</span>
+                <button
+                  onClick={fetchMetrics}
+                  className="px-3 py-1 bg-rose-600 text-white rounded font-medium hover:bg-rose-500 transition"
+                >
+                  Retry
+                </button>
+              </div>
+            )}
 
             {metricsData ? (
               <div className="space-y-6">
@@ -915,79 +1057,218 @@ export default function DiabetesDashboard() {
                     <div className="text-2xl font-extrabold text-white mt-1">
                       {(metricsData.accuracy * 100).toFixed(2)}%
                     </div>
+                    {metricsData.confidence_intervals_95_pct?.accuracy_95_ci && (
+                      <div className="text-[10px] text-slate-500 mt-0.5">
+                        95% CI: [{(metricsData.confidence_intervals_95_pct.accuracy_95_ci[0] * 100).toFixed(1)}%, {(metricsData.confidence_intervals_95_pct.accuracy_95_ci[1] * 100).toFixed(1)}%]
+                      </div>
+                    )}
                   </div>
+
+                  <div className="bg-slate-950 p-4 rounded-xl border border-slate-800">
+                    <div className="text-xs text-slate-400">Balanced Accuracy</div>
+                    <div className="text-2xl font-extrabold text-cyan-400 mt-1">
+                      {(metricsData.balanced_accuracy * 100).toFixed(2)}%
+                    </div>
+                    <div className="text-[10px] text-slate-500 mt-0.5">
+                      Unweighted mean class recall
+                    </div>
+                  </div>
+
                   <div className="bg-slate-950 p-4 rounded-xl border border-slate-800">
                     <div className="text-xs text-slate-400">Macro F1-Score</div>
                     <div className="text-2xl font-extrabold text-white mt-1">
                       {metricsData.f1_macro.toFixed(4)}
                     </div>
+                    {metricsData.confidence_intervals_95_pct?.f1_macro_95_ci && (
+                      <div className="text-[10px] text-slate-500 mt-0.5">
+                        95% CI: [{metricsData.confidence_intervals_95_pct.f1_macro_95_ci[0].toFixed(3)}, {metricsData.confidence_intervals_95_pct.f1_macro_95_ci[1].toFixed(3)}]
+                      </div>
+                    )}
                   </div>
+
                   <div className="bg-slate-950 p-4 rounded-xl border border-slate-800">
-                    <div className="text-xs text-slate-400">Macro ROC-AUC</div>
-                    <div className="text-2xl font-extrabold text-white mt-1">
-                      {metricsData.roc_auc_macro.toFixed(4)}
+                    <div className="text-xs text-slate-400">Multiclass Brier Score</div>
+                    <div className="text-2xl font-extrabold text-amber-400 mt-1">
+                      {metricsData.multiclass_brier_score.toFixed(4)}
                     </div>
-                  </div>
-                  <div className="bg-slate-950 p-4 rounded-xl border border-slate-800">
-                    <div className="text-xs text-slate-400">Calibration Log Loss</div>
-                    <div className="text-2xl font-extrabold text-white mt-1">
-                      {metricsData.calibration_log_loss.toFixed(4)}
+                    <div className="text-[10px] text-slate-500 mt-0.5">
+                      Mean squared prob error
                     </div>
                   </div>
                 </div>
 
-                {/* Confusion Matrix Table */}
-                {metricsData.confusion_matrix && (
-                  <div>
-                    <h4 className="text-xs font-semibold text-slate-300 uppercase tracking-wider mb-3">
-                      Confusion Matrix (Hold-Out Test Set, N = {metricsData.sample_count})
+                {/* Per-Class Detailed Performance Breakdown */}
+                <div className="bg-slate-950/60 p-5 rounded-xl border border-slate-800 space-y-3">
+                  <h4 className="text-xs font-semibold text-slate-300 uppercase tracking-wider">
+                    Per-Class Detailed Performance (Documenting Severe Class Imbalance)
+                  </h4>
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-xs text-left text-slate-300 border border-slate-800">
+                      <thead className="bg-slate-950 text-slate-400 uppercase text-[11px]">
+                        <tr>
+                          <th className="p-2.5 border border-slate-800">Survey Class</th>
+                          <th className="p-2.5 border border-slate-800 text-center">Test Support</th>
+                          <th className="p-2.5 border border-slate-800 text-center">Recall (Sensitivity)</th>
+                          <th className="p-2.5 border border-slate-800 text-center">Precision</th>
+                          <th className="p-2.5 border border-slate-800 text-center">F1-Score</th>
+                          <th className="p-2.5 border border-slate-800 text-center">ROC-AUC</th>
+                          <th className="p-2.5 border border-slate-800 text-center">PR-AUC</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {metricsData.confusion_matrix.classes.map((cls) => {
+                          const cr = metricsData.classification_report?.[cls] || {};
+                          const roc = metricsData.roc_auc_per_class?.[cls] || 0;
+                          const pr = metricsData.average_precision_pr_auc_per_class?.[cls] || 0;
+                          const isPreDiab = cls === 'Pre-diabetic';
+                          return (
+                            <tr key={cls} className={`hover:bg-slate-900/50 ${isPreDiab ? 'bg-amber-950/20' : ''}`}>
+                              <td className="p-2.5 font-semibold text-white border border-slate-800 flex items-center space-x-2">
+                                <span>{cls}</span>
+                                {isPreDiab && (
+                                  <span className="text-[9px] px-1.5 py-0.5 bg-amber-500/20 text-amber-300 rounded border border-amber-500/30">
+                                    Severe Imbalance (1.8%)
+                                  </span>
+                                )}
+                              </td>
+                              <td className="p-2.5 text-center border border-slate-800 font-mono">
+                                {cr.support || metricsData.confusion_matrix.breakdown[cls]?.total_actual}
+                              </td>
+                              <td className="p-2.5 text-center border border-slate-800 font-mono font-bold text-emerald-400">
+                                {((cr.recall ?? metricsData.confusion_matrix.breakdown[cls]?.sensitivity_recall) * 100).toFixed(1)}%
+                              </td>
+                              <td className="p-2.5 text-center border border-slate-800 font-mono">
+                                {((cr.precision ?? metricsData.confusion_matrix.breakdown[cls]?.precision) * 100).toFixed(1)}%
+                              </td>
+                              <td className="p-2.5 text-center border border-slate-800 font-mono">
+                                {(cr['f1-score'] ?? 0).toFixed(3)}
+                              </td>
+                              <td className="p-2.5 text-center border border-slate-800 font-mono text-cyan-400">
+                                {roc.toFixed(3)}
+                              </td>
+                              <td className="p-2.5 text-center border border-slate-800 font-mono text-indigo-400">
+                                {pr.toFixed(3)}
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                  <p className="text-[11px] text-slate-400 mt-2">
+                    <span className="font-semibold text-amber-400">Limitation Notice:</span> In 3-class survey modeling, Pre-diabetic recall is low (4.89% recall, 2.36% precision) due to extreme class imbalance (1.84% prevalence in CDC BRFSS) and overlapping symptom profiles with both normoglycemic and diagnosed diabetic respondents.
+                  </p>
+                </div>
+
+                {/* Baselines Comparison */}
+                {metricsData.baselines_comparison && (
+                  <div className="bg-slate-950/60 p-5 rounded-xl border border-slate-800 space-y-3">
+                    <h4 className="text-xs font-semibold text-slate-300 uppercase tracking-wider">
+                      Architectural Baselines Comparison
                     </h4>
                     <div className="overflow-x-auto">
                       <table className="w-full text-xs text-left text-slate-300 border border-slate-800">
                         <thead className="bg-slate-950 text-slate-400 uppercase text-[11px]">
                           <tr>
-                            <th className="p-2.5 border border-slate-800">Actual \ Predicted</th>
-                            {metricsData.confusion_matrix.classes.map((cls) => (
-                              <th key={cls} className="p-2.5 border border-slate-800 text-center">
-                                Pred: {cls}
-                              </th>
-                            ))}
-                            <th className="p-2.5 border border-slate-800 text-center">Sensitivity</th>
+                            <th className="p-2.5 border border-slate-800">Model Architecture</th>
+                            <th className="p-2.5 border border-slate-800 text-center">Accuracy</th>
+                            <th className="p-2.5 border border-slate-800 text-center">Balanced Acc</th>
+                            <th className="p-2.5 border border-slate-800 text-center">Macro F1</th>
+                            <th className="p-2.5 border border-slate-800 text-center">Brier Score</th>
+                            <th className="p-2.5 border border-slate-800 text-center">Train Time</th>
+                            <th className="p-2.5 border border-slate-800 text-center">Inference Latency</th>
                           </tr>
                         </thead>
                         <tbody>
-                          {metricsData.confusion_matrix.classes.map((actCls, rowIdx) => {
-                            const breakdown = metricsData.confusion_matrix.breakdown[actCls];
-                            return (
-                              <tr key={actCls} className="hover:bg-slate-900/50">
-                                <td className="p-2.5 font-semibold text-white border border-slate-800">
-                                  {actCls}
-                                </td>
-                                {metricsData.confusion_matrix.matrix[rowIdx].map((cell, colIdx) => (
-                                  <td
-                                    key={colIdx}
-                                    className={`p-2.5 text-center border border-slate-800 ${
-                                      rowIdx === colIdx ? 'bg-indigo-950/40 text-indigo-300 font-bold' : ''
-                                    }`}
-                                  >
-                                    {cell}
+                          {Object.entries(metricsData.baselines_comparison)
+                            .filter(([k]) => !['probability_calibration_assessment', 'primary_model_training_seconds', 'primary_model_inference_latency_ms'].includes(k))
+                            .map(([key, model]) => {
+                              const isSelected = key === 'random_forest_balanced';
+                              return (
+                                <tr key={key} className={`hover:bg-slate-900/50 ${isSelected ? 'bg-indigo-950/30' : ''}`}>
+                                  <td className="p-2.5 font-semibold text-white border border-slate-800">
+                                    <div className="flex items-center space-x-2">
+                                      <span className="capitalize">{key.replace(/_/g, ' ')}</span>
+                                      {isSelected && (
+                                        <span className="text-[9px] px-1.5 py-0.5 bg-indigo-500/20 text-indigo-300 rounded border border-indigo-500/30">
+                                          Selected Model
+                                        </span>
+                                      )}
+                                    </div>
+                                    <div className="text-[10px] text-slate-400 font-normal mt-0.5">{model.model_description}</div>
                                   </td>
-                                ))}
-                                <td className="p-2.5 text-center font-bold text-emerald-400 border border-slate-800">
-                                  {(breakdown.sensitivity_recall * 100).toFixed(1)}%
-                                </td>
-                              </tr>
-                            );
-                          })}
+                                  <td className="p-2.5 text-center border border-slate-800 font-mono">
+                                    {(model.accuracy * 100).toFixed(1)}%
+                                  </td>
+                                  <td className="p-2.5 text-center border border-slate-800 font-mono font-bold text-cyan-400">
+                                    {(model.balanced_accuracy * 100).toFixed(1)}%
+                                  </td>
+                                  <td className="p-2.5 text-center border border-slate-800 font-mono">
+                                    {model.f1_macro.toFixed(3)}
+                                  </td>
+                                  <td className="p-2.5 text-center border border-slate-800 font-mono">
+                                    {model.brier_score ? model.brier_score.toFixed(3) : 'N/A'}
+                                  </td>
+                                  <td className="p-2.5 text-center border border-slate-800 font-mono text-slate-400">
+                                    {model.training_time_sec ? `${model.training_time_sec.toFixed(2)}s` : '0.00s'}
+                                  </td>
+                                  <td className="p-2.5 text-center border border-slate-800 font-mono text-slate-400">
+                                    {model.inference_latency_ms_per_sample ? `${(model.inference_latency_ms_per_sample * 1000).toFixed(2)}µs` : 'N/A'}
+                                  </td>
+                                </tr>
+                              );
+                            })}
                         </tbody>
                       </table>
                     </div>
                   </div>
                 )}
+
+                {/* Duplicate Profiles & Secondary Binary Task Cards */}
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  {metricsData.duplicate_profile_analysis && (
+                    <div className="bg-slate-950/60 p-4 rounded-xl border border-slate-800 space-y-2">
+                      <h4 className="text-xs font-semibold text-slate-300 uppercase tracking-wider">
+                        Survey Duplication & Bayes Error
+                      </h4>
+                      <p className="text-xs text-slate-300">
+                        In {metricsData.duplicate_profile_analysis.total_records.toLocaleString()} respondents across 21 features, {metricsData.duplicate_profile_analysis.duplicate_profile_rows} rows ({metricsData.duplicate_profile_analysis.duplicate_profile_percentage}%) share identical responses.
+                      </p>
+                      <p className="text-xs text-amber-300/90">
+                        <span className="font-semibold">{metricsData.duplicate_profile_analysis.profiles_with_conflicting_diagnoses} profile clusters</span> have identical survey answers but conflicting diabetes statuses, illustrating the irreducible error ceiling inherent to survey data without laboratory blood glucose biomarkers.
+                      </p>
+                    </div>
+                  )}
+
+                  {metricsData.secondary_binary_screening_task && (
+                    <div className="bg-slate-950/60 p-4 rounded-xl border border-slate-800 space-y-2">
+                      <h4 className="text-xs font-semibold text-slate-300 uppercase tracking-wider">
+                        Secondary Binary Screening Experiment
+                      </h4>
+                      <p className="text-xs text-slate-300">
+                        When evaluated as a secondary screening task (0: No Reported Diabetes vs 1: At-Risk Pre-diabetic or Diabetic):
+                      </p>
+                      <div className="grid grid-cols-2 gap-2 text-xs pt-1">
+                        <div className="p-2 bg-slate-900 rounded border border-slate-800">
+                          <span className="text-slate-400 block">At-Risk Sensitivity</span>
+                          <span className="text-emerald-400 font-bold text-sm">
+                            {(metricsData.secondary_binary_screening_task.sensitivity_recall * 100).toFixed(1)}%
+                          </span>
+                        </div>
+                        <div className="p-2 bg-slate-900 rounded border border-slate-800">
+                          <span className="text-slate-400 block">ROC-AUC</span>
+                          <span className="text-cyan-400 font-bold text-sm">
+                            {metricsData.secondary_binary_screening_task.roc_auc.toFixed(4)}
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </div>
               </div>
             ) : (
-              <div className="text-center py-8 text-slate-500 text-xs">
-                Loading test validation metrics from API...
+              <div className="text-center py-12 text-slate-500 text-xs">
+                {metricsLoading ? 'Loading validation metrics from backend...' : 'Click "Refresh Benchmark" to load metrics.'}
               </div>
             )}
           </div>
